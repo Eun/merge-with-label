@@ -147,7 +147,7 @@ func (h *Handler) areChecksGreen(ctx context.Context, accessToken *internal.Acce
 		return false, errors.WithStack(err)
 	}
 
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		h.GetLoggerForContext(ctx).ErrorCtx(
 			ctx,
 			"error when checking runs: expected 200 status code",
@@ -337,8 +337,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, label := range req.PullRequest.Labels {
-		if label.Name == "merge" {
-
+		if label.Name == "merge" || label.Name == "force-merge" {
 			accessToken, err := h.getAccessToken(r.Context(), &req)
 			if err != nil {
 				h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error getting access token", "body", string(body))
@@ -346,11 +345,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			checksOK, err := h.areChecksGreen(r.Context(), accessToken, &req)
-			if err != nil {
-				h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error during getting checks", "body", string(body))
-				h.respond(w, http.StatusOK, "ok")
-				return
+			checksOK := true
+			if label.Name == "merge" {
+				checksOK, err = h.areChecksGreen(r.Context(), accessToken, &req)
+				if err != nil {
+					h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error during getting checks", "body", string(body))
+					h.respond(w, http.StatusOK, "ok")
+					return
+				}
 			}
 
 			if checksOK {
