@@ -14,6 +14,9 @@ type Request struct {
 		Merged    bool   `json:"merged"`
 		Number    int    `json:"number"`
 		State     string `json:"state"`
+		Head      struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
 	} `json:"pull_request"`
 	Repository *struct {
 		FullName string `json:"full_name"`
@@ -33,4 +36,12 @@ type MergeResponse struct {
 type AccessToken struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type CheckRunsResponse struct {
+	TotalCount int `json:"total_count"`
+	CheckRuns  []struct {
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+	} `json:"check_runs"`
 }

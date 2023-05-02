@@ -121,11 +121,67 @@ func (h *Handler) getAccessToken(ctx context.Context, req *internal.Request) (*i
 	return &token, nil
 }
 
-func (h *Handler) mergePullRequest(ctx context.Context, req *internal.Request, tryCounter int) error {
-	accessToken, err := h.getAccessToken(ctx, req)
+func (h *Handler) areChecksGreen(ctx context.Context, accessToken *internal.AccessToken, req *internal.Request) (bool, error) {
+	r, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("https://api.github.com/repos/%s/commits/%s/check-runs", req.Repository.FullName, req.PullRequest.Head.SHA),
+		http.NoBody,
+	)
 	if err != nil {
-		return errors.WithStack(err)
+		return false, errors.WithStack(err)
 	}
+
+	r.Header.Add("Accept", "application/vnd.github+json")
+	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
+	r.Header.Add("Authorization", "Bearer "+accessToken.Token)
+
+	resp, err := h.HTTPClient.Do(r)
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+	defer resp.Body.Close()
+
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		h.GetLoggerForContext(ctx).ErrorCtx(
+			ctx,
+			"error when checking runs: expected 200 status code",
+			"code", resp.StatusCode,
+			"body", string(buf),
+		)
+		return false, errors.New("error when performing merge: expected 200 status code")
+	}
+
+	var checkRunsResponse internal.CheckRunsResponse
+	if err := json.Unmarshal(buf, &checkRunsResponse); err != nil {
+		h.GetLoggerForContext(ctx).ErrorCtx(
+			ctx,
+			"error when decoding check runs response",
+			"body", string(buf),
+		)
+		return false, errors.WithStack(err)
+	}
+
+	for _, run := range checkRunsResponse.CheckRuns {
+		if run.Status != "completed" {
+			return false, nil
+		}
+		switch run.Conclusion {
+		case "neutral", "success", "skipped":
+		default:
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+func (h *Handler) mergePullRequest(ctx context.Context, accessToken *internal.AccessToken, req *internal.Request, tryCounter int) error {
 	var body bytes.Buffer
 
 	if err := json.NewEncoder(&body).Encode(struct {
@@ -182,7 +238,7 @@ func (h *Handler) mergePullRequest(ctx context.Context, req *internal.Request, t
 		if mergeResponse.Message == "Base branch was modified. Review and try the merge again." ||
 			mergeResponse.Message == "Pull Request is not mergeable" {
 			if tryCounter < 3 {
-				return h.mergePullRequest(ctx, req, tryCounter+1)
+				return h.mergePullRequest(ctx, accessToken, req, tryCounter+1)
 			}
 		}
 		h.GetLoggerForContext(ctx).ErrorCtx(
@@ -281,10 +337,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, label := range req.PullRequest.Labels {
-		if label.Name == "merge" {
-			if err := h.mergePullRequest(r.Context(), &req, 0); err != nil {
-				h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error during merge", "body", string(body))
+		if label.Name == "merge" || label.Name == "force-merge" {
+			accessToken, err := h.getAccessToken(r.Context(), &req)
+			if err != nil {
+				h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error getting access token", "body", string(body))
+				h.respond(w, http.StatusOK, "ok")
+				return
 			}
+
+			checksOK := true
+			if label.Name == "merge" {
+				checksOK, err = h.areChecksGreen(r.Context(), accessToken, &req)
+				if err != nil {
+					h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error during getting checks", "body", string(body))
+					h.respond(w, http.StatusOK, "ok")
+					return
+				}
+			}
+
+			if checksOK {
+				if err := h.mergePullRequest(r.Context(), accessToken, &req, 0); err != nil {
+					h.GetLoggerForContext(r.Context()).ErrorCtx(r.Context(), "error during merge", "body", string(body))
+				}
+			}
+
 			h.respond(w, http.StatusOK, "ok")
 			return
 		}
