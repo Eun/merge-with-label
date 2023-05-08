@@ -282,7 +282,7 @@ func (h *Handler) mergePullRequest(ctx context.Context, accessToken *internal.Ac
 	return nil
 }
 
-func (h *Handler) shouldExecuteLogic(req *internal.Request, w http.ResponseWriter, r *http.Request) bool {
+func (h *Handler) shouldExecuteLogic(req *internal.Request, r *http.Request) bool {
 	githubEvent := r.Header.Get("X-GitHub-Event")
 
 	switch githubEvent {
@@ -340,7 +340,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.shouldExecuteLogic(&req, w, r) {
+	if !h.shouldExecuteLogic(&req, r) {
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
