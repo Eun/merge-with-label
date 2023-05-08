@@ -282,6 +282,25 @@ func (h *Handler) mergePullRequest(ctx context.Context, accessToken *internal.Ac
 	return nil
 }
 
+func (h *Handler) shouldExecuteLogic(req *internal.Request, w http.ResponseWriter, r *http.Request) bool {
+	githubEvent := r.Header.Get("X-GitHub-Event")
+
+	switch githubEvent {
+	case "check_run":
+		switch req.Action {
+		case "completed":
+			return true
+		}
+
+	case "pull_request":
+		switch req.Action {
+		case "created", "opened", "labeled", "reopened", "synchronize", "edited":
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.RequestURI != "/" && r.RequestURI != "" {
 		h.respond(w, http.StatusNotFound, "not found")
@@ -321,13 +340,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch req.Action {
-	case "created", "opened", "labeled", "reopened", "synchronize", "edited":
-	case "closed", "unlabeled":
-		h.respond(w, http.StatusOK, "ok")
-		return
-	default:
-		h.GetLoggerForContext(r.Context()).InfoCtx(r.Context(), "unknown action", "action", req.Action, "body", string(body))
+	if !h.shouldExecuteLogic(&req, w, r) {
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
@@ -336,6 +349,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
+
 	for _, label := range req.PullRequest.Labels {
 		if label.Name == "merge" || label.Name == "force-merge" {
 			accessToken, err := h.getAccessToken(r.Context(), &req)
