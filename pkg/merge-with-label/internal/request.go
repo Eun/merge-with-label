@@ -2,6 +2,15 @@ package internal
 
 import "time"
 
+type Repository struct {
+	FullName     string `json:"full_name"`
+	MasterBranch string `json:"master_branch"`
+	Name         string `json:"name"`
+	Owner        struct {
+		Name string `json:"name"`
+	} `json:"owner"`
+}
+
 type Request struct {
 	Action      string `json:"action"`
 	PullRequest *struct {
@@ -18,9 +27,7 @@ type Request struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	} `json:"pull_request"`
-	Repository *struct {
-		FullName string `json:"full_name"`
-	} `json:"repository"`
+	Repository   *Repository `json:"repository"`
 	Installation struct {
 		ID int64 `json:"id"`
 	} `json:"installation"`

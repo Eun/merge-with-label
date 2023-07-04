@@ -10,7 +10,8 @@ import (
 	"time"
 
 	merge_with_label "github.com/Eun/merge-with-label/pkg/merge-with-label"
-	"golang.org/x/exp/slog"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -55,8 +56,8 @@ func main() {
 		IdleTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
 		Handler: &merge_with_label.Handler{
-			GetLoggerForContext: func(ctx context.Context) *slog.Logger {
-				return slog.Default()
+			GetLoggerForContext: func(ctx context.Context) *zerolog.Logger {
+				return &log.Logger
 			},
 			HTTPClient: http.DefaultClient,
 			AppID:      appID,
@@ -69,7 +70,7 @@ func main() {
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
-			slog.Error("unable to listen", "address", address, "error", err)
+			log.Err(err).Str("address", address).Msg("unable to listen")
 			return
 		}
 	}()
