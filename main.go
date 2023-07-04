@@ -28,24 +28,24 @@ func main() {
 	}
 
 	if os.Getenv("APP_ID") == "" {
-		slog.Error("APP_ID is not set")
+		log.Error().Msg("APP_ID is not set")
 		return
 	}
 
 	appID, err := strconv.ParseInt(os.Getenv("APP_ID"), 10, 64)
 	if err != nil {
-		slog.Error("unable to get APP_ID", "error", err)
+		log.Error().Err(err).Msg("unable to get APP_ID")
 		return
 	}
 
 	privateKeyFile := os.Getenv("PRIVATE_KEY")
 	if privateKeyFile == "" {
-		slog.Error("PRIVATE_KEY is not set")
+		log.Error().Msg("PRIVATE_KEY is not set")
 		return
 	}
 	privateKeyBytes, err := os.ReadFile(privateKeyFile)
 	if err != nil {
-		slog.Error("unable to read private key", "file", privateKeyFile)
+		log.Error().Str("file", privateKeyFile).Msg("unable to read private key")
 		return
 	}
 
