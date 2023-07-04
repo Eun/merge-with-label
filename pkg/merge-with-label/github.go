@@ -514,62 +514,108 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 	return pullRequests, nil
 }
 
-func AreChecksGreen(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, req *internal.Request) (bool, error) {
-	r, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		fmt.Sprintf("https://api.github.com/repos/%s/commits/%s/check-runs", req.Repository.FullName, req.PullRequest.Head.SHA),
-		http.NoBody,
-	)
+func GetCheckSuiteStatusForPullRequest(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, repo *internal.Repository, number int) (string, time.Time, error) {
+	var body bytes.Buffer
+	type variables struct {
+		Owner  string `json:"owner"`
+		Name   string `json:"name"`
+		Number int    `json:"number"`
+	}
+	err := json.NewEncoder(&body).Encode(struct {
+		Query     string    `json:"query"`
+		Variables variables `json:"variables"`
+	}{
+		Query: `
+query GetCheckSuiteStatusCheckRollup($owner: String!, $name: String!, $number: Int!){ 
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      commits(last: 1) {
+        nodes {     
+          commit {
+            committedDate
+            statusCheckRollup {
+              state
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`,
+		Variables: variables{
+			Owner:  repo.Owner.Name,
+			Name:   repo.Name,
+			Number: number,
+		},
+	})
+
 	if err != nil {
-		return false, errors.Wrap(err, "unable to create request")
+		return "", time.Time{}, errors.Wrap(err, "unable to create body")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/graphql", &body)
+	if err != nil {
+		return "", time.Time{}, errors.Wrap(err, "unable to create request")
 	}
 
-	r.Header.Add("Accept", "application/vnd.github+json")
-	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
-	r.Header.Add("Authorization", "Bearer "+accessToken.Token)
+	req.Header.Set("Authorization", "Bearer "+accessToken.Token)
 
-	resp, err := client.Do(r)
+	resp, err := client.Do(req)
 	if err != nil {
-		return false, errors.Wrap(err, "unable to execute request")
+		return "", time.Time{}, errors.Wrap(err, "unable to execute request")
 	}
-	defer resp.Body.Close()
-
-	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	body.Reset()
+	_, err = io.Copy(&body, io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return false, errors.Wrap(err, "unable to copy body")
+		return "", time.Time{}, errors.Wrap(err, "unable to copy body")
 	}
-
 	if resp.StatusCode != http.StatusOK {
-		return false, errors.WithStack(&ResponseError{
-			Message:            "error when checking runs",
+		return "", time.Time{}, errors.WithStack(&ResponseError{
+			Message:            "error when getting pull requests",
 			ActualStatusCode:   resp.StatusCode,
 			ExpectedStatusCode: http.StatusOK,
-			Body:               string(buf),
+			Body:               body.String(),
 		})
 	}
-
-	var checkRunsResponse internal.CheckRunsResponse
-	if err := json.Unmarshal(buf, &checkRunsResponse); err != nil {
-		return false, errors.WithStack(&ResponseError{
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		}
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					Commits struct {
+						Nodes []struct {
+							Commit struct {
+								CommittedDate     time.Time `json:"committedDate"`
+								StatusCheckRollup struct {
+									State string `json:"state"`
+								} `json:"statusCheckRollup"`
+							} `json:"commit"`
+						} `json:"nodes"`
+					} `json:"commits"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body.Bytes(), &response); err != nil {
+		return "", time.Time{}, errors.WithStack(&ResponseError{
 			Message:            "unable to decode body",
 			ActualStatusCode:   resp.StatusCode,
 			ExpectedStatusCode: http.StatusOK,
-			Body:               string(buf),
+			Body:               body.String(),
 			NextError:          err,
 		})
 	}
 
-	for _, run := range checkRunsResponse.CheckRuns {
-		if run.Status != "completed" {
-			return false, nil
-		}
-		switch run.Conclusion {
-		case "neutral", "success", "skipped":
-		default:
-			return false, nil
-		}
+	if len(response.Errors) > 0 {
+		return "", time.Time{}, errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
 	}
 
-	return true, nil
+	if len(response.Data.Repository.PullRequest.Commits.Nodes) == 0 {
+		return "", time.Time{}, nil
+	}
+	return response.Data.Repository.PullRequest.Commits.Nodes[0].Commit.StatusCheckRollup.State,
+		response.Data.Repository.PullRequest.Commits.Nodes[0].Commit.CommittedDate,
+		nil
 }

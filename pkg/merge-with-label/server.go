@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/internal"
 	"github.com/rs/zerolog"
@@ -25,6 +26,9 @@ type Handler struct {
 }
 
 func (h *Handler) respond(w http.ResponseWriter, statusCode int, status string) {
+	if w == nil {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_, _ = fmt.Fprintf(w, `{"status": %q}`, status)
@@ -102,18 +106,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.respond(w, http.StatusOK, "ok")
 		return
 	case RunPullRequestLogic:
-		h.pullRequestLogic(w, r, &req, body)
+		h.pullRequestLogic(r.Context(), w, &req)
 		return
 	case RunPushLogic:
-		h.pushLogic(w, r, &req, body)
+		h.pushLogic(r.Context(), w, &req)
 		return
 	}
 
 }
 
-func (h *Handler) pullRequestLogic(w http.ResponseWriter, r *http.Request, req *internal.Request, body []byte) {
+func (h *Handler) pullRequestLogic(ctx context.Context, w http.ResponseWriter, req *internal.Request) {
 	if req.PullRequest == nil {
-		h.GetLoggerForContext(r.Context()).Info().Msg("request didn't contain a pull_request item")
+		h.GetLoggerForContext(ctx).Info().Msg("request didn't contain a pull_request item")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
@@ -124,27 +128,34 @@ func (h *Handler) pullRequestLogic(w http.ResponseWriter, r *http.Request, req *
 	}
 
 	for _, label := range req.PullRequest.Labels {
-		if label.Name == "merge" || label.Name == "force-merge" {
-			accessToken, err := GetAccessToken(r.Context(), h.HTTPClient, h.AppID, h.PrivateKey, req)
+		if label.Name == "auto-merge" || label.Name == "force-merge" {
+			accessToken, err := GetAccessToken(ctx, h.HTTPClient, h.AppID, h.PrivateKey, req)
 			if err != nil {
-				h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("error getting access token")
+				h.GetLoggerForContext(ctx).Error().Err(err).Msg("error getting access token")
 				h.respond(w, http.StatusOK, "ok")
 				return
 			}
 
-			checksOK := true
-			if label.Name == "merge" {
-				checksOK, err = AreChecksGreen(r.Context(), h.HTTPClient, accessToken, req)
+			var commitTime time.Time
+			var checksStatus = "SUCCESS"
+			if label.Name == "auto-merge" {
+				checksStatus, commitTime, err = GetCheckSuiteStatusForPullRequest(ctx, h.HTTPClient, accessToken, req.Repository, req.PullRequest.Number)
 				if err != nil {
-					h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("error during getting checks")
+					h.GetLoggerForContext(ctx).Error().Err(err).Msg("error during getting checks")
 					h.respond(w, http.StatusOK, "ok")
 					return
 				}
 			}
 
-			if checksOK {
-				if err := MergePullRequest(r.Context(), h.HTTPClient, accessToken, req, 0); err != nil {
-					h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("error during merge")
+			if checksStatus == "SUCCESS" {
+				if time.Now().Sub(commitTime) < time.Second*10 {
+					// it's a bit too early. block merging
+					h.respond(w, http.StatusOK, "ok")
+					return
+				}
+
+				if err := MergePullRequest(ctx, h.HTTPClient, accessToken, req, 0); err != nil {
+					h.GetLoggerForContext(ctx).Error().Err(err).Msg("error during merge")
 				}
 			}
 
@@ -156,16 +167,16 @@ func (h *Handler) pullRequestLogic(w http.ResponseWriter, r *http.Request, req *
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) pushLogic(w http.ResponseWriter, r *http.Request, req *internal.Request, body []byte) {
-	accessToken, err := GetAccessToken(r.Context(), h.HTTPClient, h.AppID, h.PrivateKey, req)
+func (h *Handler) pushLogic(ctx context.Context, w http.ResponseWriter, req *internal.Request) {
+	accessToken, err := GetAccessToken(ctx, h.HTTPClient, h.AppID, h.PrivateKey, req)
 	if err != nil {
-		h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("error getting access token")
+		h.GetLoggerForContext(ctx).Error().Err(err).Msg("error getting access token")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
-	pullRequests, err := GetPullRequestsThatNeedToBeUpdated(r.Context(), h.HTTPClient, accessToken, req)
+	pullRequests, err := GetPullRequestsThatNeedToBeUpdated(ctx, h.HTTPClient, accessToken, req)
 	if err != nil {
-		h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("error getting pull requests")
+		h.GetLoggerForContext(ctx).Error().Err(err).Msg("error getting pull requests")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
@@ -175,8 +186,8 @@ func (h *Handler) pushLogic(w http.ResponseWriter, r *http.Request, req *interna
 	}
 
 	for _, number := range pullRequests {
-		if err := UpdatePullRequest(r.Context(), h.HTTPClient, accessToken, req.Repository, number, 0); err != nil {
-			h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("error updating pull request")
+		if err := UpdatePullRequest(ctx, h.HTTPClient, accessToken, req.Repository, number, 0); err != nil {
+			h.GetLoggerForContext(ctx).Error().Err(err).Msg("error updating pull request")
 		}
 	}
 	h.respond(w, http.StatusOK, "ok")
