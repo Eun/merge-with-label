@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/internal"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -54,7 +53,7 @@ func (e *ResponseError) MarshalZerologObject(ev *zerolog.Event) {
 	ev = ev.Err(e.NextError)
 }
 
-func GetAccessToken(ctx context.Context, client *http.Client, appID int64, privateKey []byte, req *internal.Request) (*internal.AccessToken, error) {
+func GetAccessToken(ctx context.Context, client *http.Client, appID int64, privateKey []byte, req *Request) (*AccessToken, error) {
 	var body bytes.Buffer
 	err := json.NewEncoder(&body).Encode(struct {
 		Repository  string `json:"repository"`
@@ -129,7 +128,7 @@ func GetAccessToken(ctx context.Context, client *http.Client, appID int64, priva
 		})
 	}
 
-	var token internal.AccessToken
+	var token AccessToken
 	if err := json.Unmarshal(buf, &token); err != nil {
 		return nil, errors.WithStack(&ResponseError{
 			Message:            "unable to decode body",
@@ -143,7 +142,7 @@ func GetAccessToken(ctx context.Context, client *http.Client, appID int64, priva
 	return &token, nil
 }
 
-func GetLatestCommitShaForPullRequest(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, repo *internal.Repository, number int) (string, error) {
+func GetLatestCommitShaForPullRequest(ctx context.Context, client *http.Client, token string, repo *Repository, number int) (string, error) {
 	var body bytes.Buffer
 	type variables struct {
 		Owner  string `json:"owner"`
@@ -184,7 +183,7 @@ query GetLatestCommit($owner: String!, $name: String!, $number: Int!) {
 		return "", errors.Wrap(err, "unable to create request")
 	}
 
-	req.Header.Set("Authorization", "Bearer "+accessToken.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -242,7 +241,7 @@ query GetLatestCommit($owner: String!, $name: String!, $number: Int!) {
 
 }
 
-func MergePullRequest(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, req *internal.Request, tryCounter int) error {
+func MergePullRequest(ctx context.Context, client *http.Client, token string, req *Request, tryCounter int) error {
 	var body bytes.Buffer
 
 	if err := json.NewEncoder(&body).Encode(struct {
@@ -269,7 +268,7 @@ func MergePullRequest(ctx context.Context, client *http.Client, accessToken *int
 
 	r.Header.Add("Accept", "application/vnd.github+json")
 	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
-	r.Header.Add("Authorization", "Bearer "+accessToken.Token)
+	r.Header.Add("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(r)
 	if err != nil {
@@ -300,7 +299,7 @@ func MergePullRequest(ctx context.Context, client *http.Client, accessToken *int
 		if mergeResponse.Message == "Base branch was modified. Review and try the merge again." ||
 			mergeResponse.Message == "Pull Request is not mergeable" {
 			if tryCounter < 3 {
-				return MergePullRequest(ctx, client, accessToken, req, tryCounter+1)
+				return MergePullRequest(ctx, client, token, req, tryCounter+1)
 			}
 		}
 	}
@@ -314,7 +313,7 @@ func MergePullRequest(ctx context.Context, client *http.Client, accessToken *int
 		})
 	}
 
-	var mergeResponse internal.MergeResponse
+	var mergeResponse MergeResponse
 	if err := json.Unmarshal(buf, &mergeResponse); err != nil {
 		return errors.WithStack(&ResponseError{
 			Message:            "unable to decode body",
@@ -331,8 +330,8 @@ func MergePullRequest(ctx context.Context, client *http.Client, accessToken *int
 	return nil
 }
 
-func UpdatePullRequest(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, repo *internal.Repository, number, tryCounter int) error {
-	sha, err := GetLatestCommitShaForPullRequest(ctx, client, accessToken, repo, number)
+func UpdatePullRequest(ctx context.Context, client *http.Client, token string, repo *Repository, number, tryCounter int) error {
+	sha, err := GetLatestCommitShaForPullRequest(ctx, client, token, repo, number)
 	if err != nil {
 		return errors.Wrap(err, "unable to get latest commit sha")
 	}
@@ -362,7 +361,7 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, accessToken *in
 
 	r.Header.Add("Accept", "application/vnd.github+json")
 	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
-	r.Header.Add("Authorization", "Bearer "+accessToken.Token)
+	r.Header.Add("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(r)
 	if err != nil {
@@ -379,7 +378,7 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, accessToken *in
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
 		if tryCounter < 3 {
-			return UpdatePullRequest(ctx, client, accessToken, repo, number, tryCounter+1)
+			return UpdatePullRequest(ctx, client, token, repo, number, tryCounter+1)
 		}
 	}
 
@@ -394,7 +393,7 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, accessToken *in
 	return nil
 }
 
-func GetPullRequestsThatNeedToBeUpdated(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, req *internal.Request) ([]int, error) {
+func GetPullRequestsThatNeedToBeUpdated(ctx context.Context, client *http.Client, token string, repo *Repository) ([]int, error) {
 	var after string
 	var body bytes.Buffer
 	var pullRequests []int
@@ -430,8 +429,8 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 `,
 			Variables: variables{
 				After:  after,
-				Query:  fmt.Sprintf("repo:%s is:pr state:open label:auto-update", req.Repository.FullName),
-				Branch: req.Repository.MasterBranch,
+				Query:  fmt.Sprintf("repo:%s is:pr state:open label:auto-update", repo.FullName),
+				Branch: repo.MasterBranch,
 			},
 		})
 
@@ -443,7 +442,7 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 			return nil, errors.Wrap(err, "unable to create request")
 		}
 
-		req.Header.Set("Authorization", "Bearer "+accessToken.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -514,7 +513,7 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 	return pullRequests, nil
 }
 
-func GetCheckSuiteStatusForPullRequest(ctx context.Context, client *http.Client, accessToken *internal.AccessToken, repo *internal.Repository, number int) (string, time.Time, error) {
+func GetCheckSuiteStatusForPullRequest(ctx context.Context, client *http.Client, token string, repo *Repository, number int) (string, time.Time, error) {
 	var body bytes.Buffer
 	type variables struct {
 		Owner  string `json:"owner"`
@@ -558,7 +557,7 @@ query GetCheckSuiteStatusCheckRollup($owner: String!, $name: String!, $number: I
 		return "", time.Time{}, errors.Wrap(err, "unable to create request")
 	}
 
-	req.Header.Set("Authorization", "Bearer "+accessToken.Token)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
 	if err != nil {

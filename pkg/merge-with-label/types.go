@@ -1,4 +1,4 @@
-package internal
+package merge_with_label
 
 import "time"
 
