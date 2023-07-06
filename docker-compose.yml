@@ -10,7 +10,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - "private-key.pem:/private-key.pem:ro"
+      - "./private-key.pem:/private-key.pem:ro"
     environment:
       PORT: 8000
       REDIS_HOST: redis:6379
