@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+	"strings"
 
+	"github.com/adjust/rmq/v5"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -22,44 +24,7 @@ type Handler struct {
 	HTTPClient          *http.Client
 	AppID               int64
 	PrivateKey          []byte
-}
-
-func (h *Handler) respond(w http.ResponseWriter, statusCode int, status string) {
-	if w == nil {
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	_, _ = fmt.Fprintf(w, `{"status": %q}`, status)
-}
-
-type LogicToExecute int
-
-const (
-	NoLogic LogicToExecute = iota
-	RunPullRequestLogic
-	RunPushLogic
-)
-
-func (h *Handler) shouldExecuteLogic(req *Request, r *http.Request) LogicToExecute {
-	githubEvent := r.Header.Get("X-GitHub-Event")
-
-	switch githubEvent {
-	case "check_run":
-		switch req.Action {
-		case "completed":
-			return RunPullRequestLogic
-		}
-
-	case "pull_request":
-		switch req.Action {
-		case "created", "opened", "labeled", "reopened", "synchronize", "edited":
-			return RunPullRequestLogic
-		}
-	case "push":
-		return RunPushLogic
-	}
-	return NoLogic
+	Queue               rmq.Queue
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -95,26 +60,35 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logicToExecute := h.shouldExecuteLogic(&req, r)
-	if logicToExecute == NoLogic {
+	githubEvent := r.Header.Get("X-GitHub-Event")
+	githubId := r.Header.Get("X-GitHub-Delivery")
 
+	if githubId == "" {
+		githubId = uuid.NewString()
 	}
 
-	switch logicToExecute {
-	case NoLogic:
-		h.respond(w, http.StatusOK, "ok")
-		return
-	case RunPullRequestLogic:
-		h.pullRequestLogic(r.Context(), w, &req)
-		return
-	case RunPushLogic:
-		h.pushLogic(r.Context(), w, &req)
+	switch githubEvent {
+	case "check_run":
+		switch req.Action {
+		case "completed":
+			h.pullRequestLogic(r.Context(), githubId, w, &req)
+			return
+		}
+
+	case "pull_request":
+		switch req.Action {
+		case "created", "opened", "labeled", "reopened", "synchronize", "edited":
+			h.pullRequestLogic(r.Context(), githubId, w, &req)
+			return
+		}
+	case "push":
+		h.pushLogic(r.Context(), githubId, w, &req)
 		return
 	}
-
+	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) pullRequestLogic(ctx context.Context, w http.ResponseWriter, req *Request) {
+func (h *Handler) pullRequestLogic(ctx context.Context, id string, w http.ResponseWriter, req *Request) {
 	if req.PullRequest == nil {
 		h.GetLoggerForContext(ctx).Info().Msg("request didn't contain a pull_request item")
 		h.respond(w, http.StatusOK, "ok")
@@ -126,68 +100,73 @@ func (h *Handler) pullRequestLogic(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
-	for _, label := range req.PullRequest.Labels {
-		if label.Name == "auto-merge" || label.Name == "force-merge" {
-			accessToken, err := GetAccessToken(ctx, h.HTTPClient, h.AppID, h.PrivateKey, req)
-			if err != nil {
-				h.GetLoggerForContext(ctx).Error().Err(err).Msg("error getting access token")
-				h.respond(w, http.StatusOK, "ok")
-				return
-			}
-
-			var commitTime time.Time
-			var checksStatus = "SUCCESS"
-			if label.Name == "auto-merge" {
-				checksStatus, commitTime, err = GetCheckSuiteStatusForPullRequest(ctx, h.HTTPClient, accessToken.Token, req.Repository, req.PullRequest.Number)
-				if err != nil {
-					h.GetLoggerForContext(ctx).Error().Err(err).Msg("error during getting checks")
-					h.respond(w, http.StatusOK, "ok")
-					return
-				}
-			}
-
-			if checksStatus == "SUCCESS" {
-				if time.Now().Sub(commitTime) < time.Second*10 {
-					// it's a bit too early. block merging
-					h.respond(w, http.StatusOK, "ok")
-					return
-				}
-
-				if err := MergePullRequest(ctx, h.HTTPClient, accessToken.Token, req, 0); err != nil {
-					h.GetLoggerForContext(ctx).Error().Err(err).Msg("error during merge")
-				}
-			}
-
-			h.respond(w, http.StatusOK, "ok")
-			return
-		}
+	if !h.hasRequiredLabels(req.PullRequest) {
+		h.respond(w, http.StatusOK, "ok")
+		return
 	}
 
+	msg, err := json.Marshal(QueuePullRequestMessage{
+		QueueMessage: QueueMessage{
+			ID:   id,
+			Kind: PullRequestMessage,
+		},
+		InstallationID: req.Installation.ID,
+		PullRequest:    req.PullRequest,
+		Repository:     req.Repository,
+	})
+	if err != nil {
+		h.GetLoggerForContext(ctx).Error().Err(err).Msg("unable to marshal message")
+		h.respond(w, http.StatusInternalServerError, "error")
+		return
+	}
+
+	if err := h.Queue.PublishBytes(msg); err != nil {
+		h.GetLoggerForContext(ctx).Error().Err(err).Msg("unable to publish message queue")
+		h.respond(w, http.StatusInternalServerError, "error")
+		return
+	}
+}
+
+func (h *Handler) pushLogic(ctx context.Context, id string, w http.ResponseWriter, req *Request) {
+	msg, err := json.Marshal(QueuePushMessage{
+		QueueMessage: QueueMessage{
+			ID:   id,
+			Kind: PushRequestMessage,
+		},
+		InstallationID: req.Installation.ID,
+		Repository:     req.Repository,
+	})
+	if err != nil {
+		h.GetLoggerForContext(ctx).Error().Err(err).Msg("unable to marshal message")
+		h.respond(w, http.StatusInternalServerError, "error")
+		return
+	}
+
+	if err := h.Queue.PublishBytes(msg); err != nil {
+		h.GetLoggerForContext(ctx).Error().Err(err).Msg("unable to publish message queue")
+		h.respond(w, http.StatusInternalServerError, "error")
+		return
+	}
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) pushLogic(ctx context.Context, w http.ResponseWriter, req *Request) {
-	accessToken, err := GetAccessToken(ctx, h.HTTPClient, h.AppID, h.PrivateKey, req)
-	if err != nil {
-		h.GetLoggerForContext(ctx).Error().Err(err).Msg("error getting access token")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-	pullRequests, err := GetPullRequestsThatNeedToBeUpdated(ctx, h.HTTPClient, accessToken.Token, req.Repository)
-	if err != nil {
-		h.GetLoggerForContext(ctx).Error().Err(err).Msg("error getting pull requests")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-	if len(pullRequests) == 0 {
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	for _, number := range pullRequests {
-		if err := UpdatePullRequest(ctx, h.HTTPClient, accessToken.Token, req.Repository, number, 0); err != nil {
-			h.GetLoggerForContext(ctx).Error().Err(err).Msg("error updating pull request")
+func (h *Handler) hasRequiredLabels(pr *PullRequest) bool {
+	for _, l := range pr.Labels {
+		if strings.EqualFold(l.Name, "auto-merge") {
+			return true
+		}
+		if strings.EqualFold(l.Name, "auto-update") {
+			return true
 		}
 	}
-	h.respond(w, http.StatusOK, "ok")
+	return false
+}
+
+func (h *Handler) respond(w http.ResponseWriter, statusCode int, status string) {
+	if w == nil {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	_, _ = fmt.Fprintf(w, `{"status": %q}`, status)
 }

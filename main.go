@@ -2,84 +2,34 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"time"
 
 	merge_with_label "github.com/Eun/merge-with-label/pkg/merge-with-label"
+	"github.com/adjust/rmq/v5"
+	"github.com/pkg/errors"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"gopkg.in/yaml.v3"
+)
+
+const (
+	queueName         = "queue"
+	pushBackQueueName = "queue-back"
+	prefetchLimit     = 10
+	pollDuration      = time.Second
+	numConsumers      = 5
+	maxRetries        = 5
 )
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-
-	if personalFile := os.Getenv("PERSONAL_MODE"); personalFile != "" {
-		log.Info().Msg("running in personal mode")
-		data, err := os.ReadFile(personalFile)
-		if err != nil {
-			log.Error().Err(err).Msgf("unable to read `%s' file", personalFile)
-			return
-		}
-
-		var personalData []struct {
-			Repo   string `yaml:"repo"`
-			Branch string `yaml:"branch"`
-		}
-
-		if err := yaml.Unmarshal(data, &personalData); err != nil {
-			log.Error().Err(err).Msgf("unable to read `%s' file", personalFile)
-			return
-		}
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer cancel()
-		for i := range personalData {
-			parts := strings.SplitN(personalData[i].Repo, "/", 2)
-			if len(parts) != 2 {
-				log.Warn().Str("repo", personalData[i].Repo).Msg("invalid format -> ignored")
-				continue
-			}
-			if personalData[i].Branch == "" {
-				log.Warn().Str("repo", personalData[i].Repo).Msg("no branch present -> ignored")
-				continue
-			}
-
-			repo := merge_with_label.Repository{
-				FullName:     personalData[i].Repo,
-				MasterBranch: personalData[i].Branch,
-				Name:         parts[1],
-				Owner: struct {
-					Name string `json:"name"`
-				}{
-					Name: parts[0],
-				},
-			}
-
-			logger := log.Logger.With().Str("repo", personalData[i].Repo).Logger()
-			go func() {
-				err := merge_with_label.PersonalMode(
-					ctx,
-					&logger,
-					http.DefaultClient,
-					&repo,
-					os.Getenv("GITHUB_TOKEN"),
-				)
-				if err != nil {
-					logger.Error().Err(err).Msg("error during personal mode")
-				}
-			}()
-		}
-
-		<-ctx.Done()
-		return
-	}
 
 	address := os.Getenv("ADDRESS")
 	if address == "" {
@@ -112,6 +62,62 @@ func main() {
 		return
 	}
 
+	redisCacheClient := redis.NewClient(&redis.Options{
+		Network:  "tcp",
+		Addr:     os.Getenv("REDIS_HOST"),
+		Username: os.Getenv("REDIS_USER"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       0,
+	})
+	defer redisCacheClient.Close()
+
+	redisQueueClient := redis.NewClient(&redis.Options{
+		Network:  "tcp",
+		Addr:     os.Getenv("REDIS_HOST"),
+		Username: os.Getenv("REDIS_USER"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       1,
+	})
+	defer redisQueueClient.Close()
+
+	errChan := make(chan error, 10)
+
+	producerConnection, err := rmq.OpenConnectionWithRedisClient("producer", redisQueueClient, errChan)
+	if err != nil {
+		log.Error().Msg("unable to open queue connection to redis")
+		return
+	}
+
+	producerQueue, err := producerConnection.OpenQueue(queueName)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to open queue")
+		return
+	}
+
+	consumerConnection, err := rmq.OpenConnectionWithRedisClient("consumer", redisQueueClient, errChan)
+	if err != nil {
+		log.Error().Msg("unable to open queue connection to redis")
+		return
+	}
+
+	producerPushBackConnection, err := rmq.OpenConnectionWithRedisClient("producer", redisQueueClient, errChan)
+	if err != nil {
+		log.Error().Msg("unable to open queue connection to redis")
+		return
+	}
+
+	producerPushBackQueue, err := producerPushBackConnection.OpenQueue(pushBackQueueName)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to open queue")
+		return
+	}
+
+	consumerPushBackConnection, err := rmq.OpenConnectionWithRedisClient("consumer", redisQueueClient, errChan)
+	if err != nil {
+		log.Error().Msg("unable to open queue connection to redis")
+		return
+	}
+
 	server := http.Server{
 		Addr:              address,
 		ReadTimeout:       1 * time.Second,
@@ -119,6 +125,7 @@ func main() {
 		IdleTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
 		Handler: &merge_with_label.Handler{
+			Queue: producerQueue,
 			GetLoggerForContext: func(ctx context.Context) *zerolog.Logger {
 				return &log.Logger
 			},
@@ -131,13 +138,95 @@ func main() {
 		},
 	}
 
+	queue, err := consumerConnection.OpenQueue(queueName)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to open queue")
+		return
+	}
+
+	if err := queue.StartConsuming(prefetchLimit, pollDuration); err != nil {
+		log.Error().Err(err).Msg("unable to start consuming")
+		return
+	}
+
+	pushBackQueue, err := consumerPushBackConnection.OpenQueue(pushBackQueueName)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to open queue")
+		return
+	}
+
+	if err := pushBackQueue.StartConsuming(prefetchLimit, pollDuration); err != nil {
+		log.Error().Err(err).Msg("unable to start consuming")
+		return
+	}
+
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
-			log.Err(err).Str("address", address).Msg("unable to listen")
+			errChan <- errors.Wrapf(err, "unable to listen on address %s", address)
 			return
 		}
 	}()
 
-	<-ctx.Done()
+	go func() {
+		cleanerConnection, err := rmq.OpenConnectionWithRedisClient("cleaner", redisQueueClient, errChan)
+		if err != nil {
+			log.Error().Msg("unable to open queue connection to redis")
+			return
+		}
+		cleaner := rmq.NewCleaner(cleanerConnection)
+		for {
+			select {
+			case <-time.After(time.Minute):
+				returned, err := cleaner.Clean()
+				if err != nil {
+					log.Error().Err(err).Msg("unable to clean queue")
+					continue
+				}
+				log.Debug().Msgf("cleaned %d", returned)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < numConsumers; i++ {
+		logger := log.Logger.With().Int("consumer", i).Logger()
+		if _, err := queue.AddConsumer(
+			fmt.Sprintf("consumer %d", i),
+			&merge_with_label.QueueConsumer{
+				PushBackQueue:    pushBackQueue,
+				Logger:           &logger,
+				HTTPClient:       http.DefaultClient,
+				AppID:            appID,
+				PrivateKey:       privateKeyBytes,
+				RedisCacheClient: redisCacheClient,
+				MaxRetries:       maxRetries,
+			}); err != nil {
+			log.Error().Err(err).Msg("unable to add consumer")
+			return
+		}
+	}
+
+	for i := 0; i < numConsumers; i++ {
+		logger := log.Logger.With().Int("push_back_consumer", i).Logger()
+		if _, err := pushBackQueue.AddConsumer(
+			fmt.Sprintf("push_back_consumer %d", i),
+			&merge_with_label.PushBackQueueConsumer{
+				Queue:         producerQueue,
+				PushBackQueue: producerPushBackQueue,
+				Logger:        &logger,
+			}); err != nil {
+			log.Error().Err(err).Msg("unable to add consumer")
+			return
+		}
+	}
+
+	select {
+	case err := <-errChan:
+		log.Error().Err(err).Send()
+	case <-ctx.Done():
+	}
+	log.Info().Msg("shutting down")
 	_ = server.Shutdown(ctx)
+	<-consumerConnection.StopAllConsuming()
 }

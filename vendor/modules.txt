@@ -1,15 +1,48 @@
+# github.com/adjust/rmq/v5 v5.1.3
+## explicit; go 1.17
+github.com/adjust/rmq/v5
+# github.com/cespare/xxhash/v2 v2.2.0
+## explicit; go 1.11
+github.com/cespare/xxhash/v2
+# github.com/davecgh/go-spew v1.1.0
+## explicit
+github.com/davecgh/go-spew/spew
+# github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f
+## explicit
+github.com/dgryski/go-rendezvous
 # github.com/golang-jwt/jwt/v4 v4.5.0
 ## explicit; go 1.16
 github.com/golang-jwt/jwt/v4
+# github.com/google/uuid v1.3.0
+## explicit
+github.com/google/uuid
+# github.com/kr/text v0.2.0
+## explicit
 # github.com/mattn/go-colorable v0.1.12
 ## explicit; go 1.13
 github.com/mattn/go-colorable
 # github.com/mattn/go-isatty v0.0.14
 ## explicit; go 1.12
 github.com/mattn/go-isatty
+# github.com/mitchellh/mapstructure v1.5.0
+## explicit; go 1.14
+github.com/mitchellh/mapstructure
 # github.com/pkg/errors v0.9.1
 ## explicit
 github.com/pkg/errors
+# github.com/pmezard/go-difflib v1.0.0
+## explicit
+github.com/pmezard/go-difflib/difflib
+# github.com/redis/go-redis/v9 v9.0.3
+## explicit; go 1.18
+github.com/redis/go-redis/v9
+github.com/redis/go-redis/v9/internal
+github.com/redis/go-redis/v9/internal/hashtag
+github.com/redis/go-redis/v9/internal/hscan
+github.com/redis/go-redis/v9/internal/pool
+github.com/redis/go-redis/v9/internal/proto
+github.com/redis/go-redis/v9/internal/rand
+github.com/redis/go-redis/v9/internal/util
 # github.com/rs/zerolog v1.29.1
 ## explicit; go 1.15
 github.com/rs/zerolog
@@ -19,6 +52,9 @@ github.com/rs/zerolog/log
 # github.com/sanity-io/litter v1.5.5
 ## explicit; go 1.16
 github.com/sanity-io/litter
+# github.com/stretchr/testify v1.7.0
+## explicit; go 1.13
+github.com/stretchr/testify/assert
 # golang.org/x/sys v0.1.0
 ## explicit; go 1.17
 golang.org/x/sys/unix
