@@ -1,0 +1,13 @@
+version: 1
+merge:
+  label: "merge"
+  strategy: "squash"
+  requiredApprovals: 1
+  requiredChecks:
+    - linter
+    - test
+  requireLinearHistory: true
+update:
+  label: "update-branch"
+  ignoreFromUsers:
+    - dependabot

@@ -12,6 +12,7 @@ type Owner struct {
 }
 
 type Repository struct {
+	NodeId        string `json:"node_id"`
 	FullName      string `json:"full_name"`
 	DefaultBranch string `json:"default_branch"`
 	Name          string `json:"name"`

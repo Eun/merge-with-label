@@ -55,6 +55,10 @@ github.com/sanity-io/litter
 # github.com/stretchr/testify v1.7.0
 ## explicit; go 1.13
 github.com/stretchr/testify/assert
+# golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df
+## explicit; go 1.20
+golang.org/x/exp/constraints
+golang.org/x/exp/slices
 # golang.org/x/sys v0.1.0
 ## explicit; go 1.17
 golang.org/x/sys/unix

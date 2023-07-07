@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/sanity-io/litter"
+	"gopkg.in/yaml.v3"
 )
 
 var _ zerolog.LogObjectMarshaler = &ResponseError{}
@@ -338,7 +339,6 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, token string, r
 	}
 
 	var body bytes.Buffer
-
 	if err := json.NewEncoder(&body).Encode(struct {
 		ExpectedHeadSha string `json:"expected_head_sha"`
 	}{
@@ -363,7 +363,7 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, token string, r
 
 	resp, err := client.Do(r)
 	if err != nil {
-		return errors.WithStack(err)
+		return errors.Wrap(err, "unable to execute request")
 	}
 	defer resp.Body.Close()
 
@@ -371,7 +371,7 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, token string, r
 
 	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return errors.WithStack(err)
+		return errors.Wrap(err, "unable to copy body")
 	}
 
 	if resp.StatusCode == http.StatusUnprocessableEntity {
@@ -389,7 +389,7 @@ func UpdatePullRequest(ctx context.Context, client *http.Client, token string, r
 	return nil
 }
 
-func GetPullRequestsThatNeedToBeUpdated(ctx context.Context, client *http.Client, token string, repo *Repository) ([]int, error) {
+func GetPullRequestsThatNeedToBeUpdated(ctx context.Context, client *http.Client, token string, repo *Repository, updateLabel string) ([]int, error) {
 	var after string
 	var body bytes.Buffer
 	var pullRequests []int
@@ -425,7 +425,7 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 `,
 			Variables: variables{
 				After:  after,
-				Query:  fmt.Sprintf("repo:%s is:pr state:open label:auto-update", repo.FullName),
+				Query:  fmt.Sprintf("repo:%s is:pr state:open label:%s", repo.FullName, updateLabel),
 				Branch: repo.DefaultBranch,
 			},
 		})
@@ -490,7 +490,7 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 		}
 
 		if len(response.Errors) > 0 {
-			return nil, fmt.Errorf("error during query: %s", litter.Sdump(response.Errors))
+			return nil, errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
 		}
 
 		for _, node := range response.Data.Search.Nodes {
@@ -509,7 +509,19 @@ query GetPullRequests($query: String!, $branch: String!, $after: String) {
 	return pullRequests, nil
 }
 
-func GetPullRequestDetails(ctx context.Context, client *http.Client, token string, repo *Repository, number int) (string, int, error) {
+type PullRequestDetails struct {
+	Title          string
+	AheadBy        int
+	State          string
+	Author         string
+	ApprovedCount  int
+	LastCommitSha  string
+	LastCommitTime time.Time
+	CheckStates    map[string]string
+	Labels         []string
+}
+
+func GetPullRequestDetails(ctx context.Context, client *http.Client, token string, repo *Repository, number int) (*PullRequestDetails, error) {
 	var body bytes.Buffer
 	type variables struct {
 		Owner  string `json:"owner"`
@@ -525,10 +537,50 @@ func GetPullRequestDetails(ctx context.Context, client *http.Client, token strin
 query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!, $branch: String!){ 
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      title
       state
       headRef {
         compare(headRef: $branch) {
             aheadBy
+        }
+      }
+      author {
+        login
+      }
+      reviews(states: APPROVED, last: 100) {
+        totalCount
+      }
+      labels(last: 100) {
+        nodes {
+          name
+        }
+      }
+      commits(last: 1) {
+        nodes {
+          commit {
+            oid
+            committedDate
+            status {
+              contexts {
+                state
+                context
+              }
+            }
+            checkSuites(last: 100) {
+              nodes {
+                app {
+                  name
+                }
+                conclusion
+                checkRuns(last:100) {
+                  nodes {
+                    name
+                    conclusion
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -544,26 +596,26 @@ query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!, $bra
 	})
 
 	if err != nil {
-		return "", 0, errors.Wrap(err, "unable to create body")
+		return nil, errors.Wrap(err, "unable to create body")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/graphql", &body)
 	if err != nil {
-		return "", 0, errors.Wrap(err, "unable to create request")
+		return nil, errors.Wrap(err, "unable to create request")
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, errors.Wrap(err, "unable to execute request")
+		return nil, errors.Wrap(err, "unable to execute request")
 	}
 	body.Reset()
 	_, err = io.Copy(&body, io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return "", 0, errors.Wrap(err, "unable to copy body")
+		return nil, errors.Wrap(err, "unable to copy body")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, errors.WithStack(&ResponseError{
+		return nil, errors.WithStack(&ResponseError{
 			Message:            "error when getting pull request details",
 			ActualStatusCode:   resp.StatusCode,
 			ExpectedStatusCode: http.StatusOK,
@@ -577,18 +629,58 @@ query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!, $bra
 		Data struct {
 			Repository struct {
 				PullRequest struct {
+					Title   string `json:"title"`
 					State   string `json:"state"`
 					HeadRef struct {
 						Compare struct {
 							AheadBy int `json:"aheadBy"`
 						} `json:"compare"`
 					} `json:"headRef"`
+					Author struct {
+						Login string `json:"login"`
+					} `json:"author"`
+					Reviews struct {
+						TotalCount int `json:"totalCount"`
+					}
+					Labels struct {
+						Nodes []struct {
+							Name string `json:"name"`
+						} `json:"nodes"`
+					} `json:"labels"`
+					Commits struct {
+						Nodes []struct {
+							Commit struct {
+								Oid           string    `json:"oid"`
+								CommittedDate time.Time `json:"committedDate"`
+								Status        struct {
+									Contexts []struct {
+										Context string `json:"context"`
+										State   string `json:"state"`
+									} `json:"contexts"`
+								} `json:"status"`
+								CheckSuites struct {
+									Nodes []struct {
+										App struct {
+											Name string
+										} `json:"app"`
+										Conclusion string `json:"conclusion"`
+										CheckRuns  struct {
+											Nodes []struct {
+												Name       string `json:"name"`
+												Conclusion string `json:"conclusion"`
+											} `json:"nodes"`
+										} `json:"checkRuns"`
+									} `json:"nodes"`
+								} `json:"checkSuites"`
+							} `json:"commit"`
+						} `json:"nodes"`
+					} `json:"commits"`
 				} `json:"pullRequest"`
 			} `json:"repository"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body.Bytes(), &response); err != nil {
-		return "", 0, errors.WithStack(&ResponseError{
+		return nil, errors.WithStack(&ResponseError{
 			Message:            "unable to decode body",
 			ActualStatusCode:   resp.StatusCode,
 			ExpectedStatusCode: http.StatusOK,
@@ -598,70 +690,93 @@ query GetPullRequestDetails($owner: String!, $name: String!, $number: Int!, $bra
 	}
 
 	if len(response.Errors) > 0 {
-		return "", 0, fmt.Errorf("error during query: %s", litter.Sdump(response.Errors))
+		return nil, errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
 	}
 
-	return response.Data.Repository.PullRequest.State, response.Data.Repository.PullRequest.HeadRef.Compare.AheadBy, nil
+	details := &PullRequestDetails{
+		Title:         response.Data.Repository.PullRequest.Title,
+		AheadBy:       response.Data.Repository.PullRequest.HeadRef.Compare.AheadBy,
+		State:         response.Data.Repository.PullRequest.State,
+		Author:        response.Data.Repository.PullRequest.Author.Login,
+		ApprovedCount: response.Data.Repository.PullRequest.Reviews.TotalCount,
+		Labels:        make([]string, len(response.Data.Repository.PullRequest.Labels.Nodes)),
+	}
+
+	for i := range response.Data.Repository.PullRequest.Labels.Nodes {
+		details.Labels[i] = response.Data.Repository.PullRequest.Labels.Nodes[i].Name
+	}
+
+	if len(response.Data.Repository.PullRequest.Commits.Nodes) != 0 {
+		commit := &response.Data.Repository.PullRequest.Commits.Nodes[0].Commit
+		details.LastCommitSha = commit.Oid
+		details.LastCommitTime = commit.CommittedDate
+
+		details.CheckStates = make(map[string]string)
+
+		for _, c := range commit.Status.Contexts {
+			details.CheckStates[c.Context] = c.State
+		}
+
+		for _, node := range commit.CheckSuites.Nodes {
+			details.CheckStates[node.App.Name] = node.Conclusion
+			for _, run := range node.CheckRuns.Nodes {
+				details.CheckStates[node.App.Name+"/"+run.Name] = run.Conclusion
+			}
+		}
+	}
+
+	return details, nil
 }
 
-func GetCheckSuiteStatusForPullRequest(ctx context.Context, client *http.Client, token string, repo *Repository, number int) (string, time.Time, error) {
+func GetLatestCommitSha(ctx context.Context, client *http.Client, token string, repo *Repository) (string, error) {
 	var body bytes.Buffer
 	type variables struct {
-		Owner  string `json:"owner"`
-		Name   string `json:"name"`
-		Number int    `json:"number"`
+		Owner string `json:"owner"`
+		Name  string `json:"name"`
 	}
 	err := json.NewEncoder(&body).Encode(struct {
 		Query     string    `json:"query"`
 		Variables variables `json:"variables"`
 	}{
 		Query: `
-query GetCheckSuiteStatusCheckRollup($owner: String!, $name: String!, $number: Int!){ 
+query GetLatestCommitSha($owner: String!, $name: String!){ 
   repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      commits(last: 1) {
-        nodes {     
-          commit {
-            committedDate
-            statusCheckRollup {
-              state
-            }
-          }
-        }
+    defaultBranchRef {
+      target {
+        oid
       }
     }
   }
 }
 `,
 		Variables: variables{
-			Owner:  repo.Owner.Login,
-			Name:   repo.Name,
-			Number: number,
+			Owner: repo.Owner.Login,
+			Name:  repo.Name,
 		},
 	})
 
 	if err != nil {
-		return "", time.Time{}, errors.Wrap(err, "unable to create body")
+		return "", errors.Wrap(err, "unable to create body")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/graphql", &body)
 	if err != nil {
-		return "", time.Time{}, errors.Wrap(err, "unable to create request")
+		return "", errors.Wrap(err, "unable to create request")
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", time.Time{}, errors.Wrap(err, "unable to execute request")
+		return "", errors.Wrap(err, "unable to execute request")
 	}
 	body.Reset()
 	_, err = io.Copy(&body, io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
-		return "", time.Time{}, errors.Wrap(err, "unable to copy body")
+		return "", errors.Wrap(err, "unable to copy body")
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", time.Time{}, errors.WithStack(&ResponseError{
-			Message:            "error when getting pull requests",
+		return "", errors.WithStack(&ResponseError{
+			Message:            "error when getting latest commit sha",
 			ActualStatusCode:   resp.StatusCode,
 			ExpectedStatusCode: http.StatusOK,
 			Body:               body.String(),
@@ -673,23 +788,16 @@ query GetCheckSuiteStatusCheckRollup($owner: String!, $name: String!, $number: I
 		}
 		Data struct {
 			Repository struct {
-				PullRequest struct {
-					Commits struct {
-						Nodes []struct {
-							Commit struct {
-								CommittedDate     time.Time `json:"committedDate"`
-								StatusCheckRollup struct {
-									State string `json:"state"`
-								} `json:"statusCheckRollup"`
-							} `json:"commit"`
-						} `json:"nodes"`
-					} `json:"commits"`
-				} `json:"pullRequest"`
+				DefaultBranchRef struct {
+					Target struct {
+						Oid string `json:"oid"`
+					} `json:"target"`
+				} `json:"defaultBranchRef"`
 			} `json:"repository"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body.Bytes(), &response); err != nil {
-		return "", time.Time{}, errors.WithStack(&ResponseError{
+		return "", errors.WithStack(&ResponseError{
 			Message:            "unable to decode body",
 			ActualStatusCode:   resp.StatusCode,
 			ExpectedStatusCode: http.StatusOK,
@@ -699,13 +807,254 @@ query GetCheckSuiteStatusCheckRollup($owner: String!, $name: String!, $number: I
 	}
 
 	if len(response.Errors) > 0 {
-		return "", time.Time{}, errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
+		return "", errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
 	}
 
-	if len(response.Data.Repository.PullRequest.Commits.Nodes) == 0 {
-		return "", time.Time{}, nil
+	return response.Data.Repository.DefaultBranchRef.Target.Oid, nil
+}
+
+func GetConfig(ctx context.Context, client *http.Client, token string, repo *Repository, sha string) (*ConfigV1, error) {
+	r, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/.github/merge-with-label.yml", repo.FullName, sha),
+		http.NoBody,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create request")
 	}
-	return response.Data.Repository.PullRequest.Commits.Nodes[0].Commit.StatusCheckRollup.State,
-		response.Data.Repository.PullRequest.Commits.Nodes[0].Commit.CommittedDate,
-		nil
+
+	r.Header.Add("Accept", "application/vnd.github.raw")
+	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
+	r.Header.Add("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(r)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to execute request")
+	}
+	defer resp.Body.Close()
+
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to copy body")
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.WithStack(&ResponseError{
+			Message:            "error when getting config",
+			ActualStatusCode:   resp.StatusCode,
+			ExpectedStatusCode: http.StatusOK,
+			Body:               string(buf),
+		})
+	}
+
+	var hdr ConfigHeader
+	if err := yaml.Unmarshal(buf, &hdr); err != nil {
+		return nil, errors.Wrap(err, "unable to decode config header")
+	}
+
+	switch hdr.Version {
+	case 1:
+		var cfg ConfigV1
+		if err := yaml.Unmarshal(buf, &cfg); err != nil {
+			return nil, errors.Wrap(err, "unable to decode config")
+		}
+		return &cfg, nil
+	default:
+		return nil, errors.Errorf("unknown version `%d'", hdr.Version)
+	}
+
+}
+
+func CreateCheckRun(ctx context.Context, client *http.Client, token string, repo *Repository, sha, status, name, title, summary string) (string, error) {
+	var body bytes.Buffer
+	type variables struct {
+		RepositoryID string `json:"repositoryId"`
+		Sha          string `json:"sha"`
+		Status       string `json:"status"`
+		Name         string `json:"name"`
+		Title        string `json:"title"`
+		Summary      string `json:"summary"`
+	}
+	err := json.NewEncoder(&body).Encode(struct {
+		Query     string    `json:"query"`
+		Variables variables `json:"variables"`
+	}{
+		Query: `
+mutation CreateCheckRun($repositoryId: ID!, $sha: GitObjectID!, $status: RequestableCheckStatusState!, $name: String!, $title: String!, $summary: String!){ 
+  createCheckRun(input: {
+    repositoryId: $repositoryId,
+    headSha: $sha,
+    status: $status,
+    name: $name,
+    conclusion: NEUTRAL,
+    output: {
+      title: $title
+      summary: $summary
+    }
+  }) {
+    clientMutationId
+  }
+}
+`,
+		Variables: variables{
+			RepositoryID: repo.NodeId,
+			Sha:          sha,
+			Status:       status,
+			Name:         name,
+			Title:        title,
+			Summary:      summary,
+		},
+	})
+
+	if err != nil {
+		return "", errors.Wrap(err, "unable to create body")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/graphql", &body)
+	if err != nil {
+		return "", errors.Wrap(err, "unable to create request")
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.Wrap(err, "unable to execute request")
+	}
+	body.Reset()
+	_, err = io.Copy(&body, io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return "", errors.Wrap(err, "unable to copy body")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", errors.WithStack(&ResponseError{
+			Message:            "error when creating check run",
+			ActualStatusCode:   resp.StatusCode,
+			ExpectedStatusCode: http.StatusOK,
+			Body:               body.String(),
+		})
+	}
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		}
+		Data struct {
+			ClientMutationId string `json:"clientMutationId"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body.Bytes(), &response); err != nil {
+		return "", errors.WithStack(&ResponseError{
+			Message:            "unable to decode body",
+			ActualStatusCode:   resp.StatusCode,
+			ExpectedStatusCode: http.StatusOK,
+			Body:               body.String(),
+			NextError:          err,
+		})
+	}
+
+	if len(response.Errors) > 0 {
+		return "", errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
+	}
+
+	return response.Data.ClientMutationId, nil
+}
+
+func UpdateCheckRun(ctx context.Context, client *http.Client, token string, repo *Repository, checkRunId, sha, status, name, title, summary string) (string, error) {
+	var body bytes.Buffer
+	type variables struct {
+		CheckRunID   string `json:"checkRunId"`
+		RepositoryID string `json:"repositoryId"`
+		Sha          string `json:"sha"`
+		Status       string `json:"status"`
+		Name         string `json:"name"`
+		Title        string `json:"title"`
+		Summary      string `json:"summary"`
+	}
+	err := json.NewEncoder(&body).Encode(struct {
+		Query     string    `json:"query"`
+		Variables variables `json:"variables"`
+	}{
+		Query: `
+mutation CreateCheckRun($checkRunId: ID!, $repositoryId: ID!, $sha: GitObjectID!, $status: RequestableCheckStatusState!, $name: String!, $title: String!, $summary: String!){ 
+  createCheckRun(input: {
+    checkRunId: $checkRunId,
+    repositoryId: $repositoryId,
+    headSha: $sha,
+    status: $status,
+    name: $name,
+    conclusion: NEUTRAL,
+    output: {
+      title: $title
+      summary: $summary
+    }
+  }) {
+    clientMutationId
+  }
+}
+`,
+		Variables: variables{
+			CheckRunID:   checkRunId,
+			RepositoryID: repo.NodeId,
+			Name:         name,
+			Sha:          sha,
+			Status:       status,
+			Title:        title,
+			Summary:      summary,
+		},
+	})
+
+	if err != nil {
+		return "", errors.Wrap(err, "unable to create body")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/graphql", &body)
+	if err != nil {
+		return "", errors.Wrap(err, "unable to create request")
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.Wrap(err, "unable to execute request")
+	}
+	body.Reset()
+	_, err = io.Copy(&body, io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return "", errors.Wrap(err, "unable to copy body")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", errors.WithStack(&ResponseError{
+			Message:            "error when updating check run",
+			ActualStatusCode:   resp.StatusCode,
+			ExpectedStatusCode: http.StatusOK,
+			Body:               body.String(),
+		})
+	}
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		}
+		Data struct {
+			ClientMutationId string `json:"clientMutationId"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body.Bytes(), &response); err != nil {
+		return "", errors.WithStack(&ResponseError{
+			Message:            "unable to decode body",
+			ActualStatusCode:   resp.StatusCode,
+			ExpectedStatusCode: http.StatusOK,
+			Body:               body.String(),
+			NextError:          err,
+		})
+	}
+
+	if len(response.Errors) > 0 {
+		return "", errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
+	}
+
+	return response.Data.ClientMutationId, nil
 }

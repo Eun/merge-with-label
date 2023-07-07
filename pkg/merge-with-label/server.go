@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/adjust/rmq/v5"
 	"github.com/google/uuid"
@@ -100,11 +99,6 @@ func (h *Handler) pullRequestLogic(ctx context.Context, id string, w http.Respon
 		return
 	}
 
-	if !h.hasRequiredLabels(req.PullRequest) {
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
 	msg, err := json.Marshal(QueuePullRequestMessage{
 		QueueMessage: QueueMessage{
 			ID:   id,
@@ -148,18 +142,6 @@ func (h *Handler) pushLogic(ctx context.Context, id string, w http.ResponseWrite
 		return
 	}
 	h.respond(w, http.StatusOK, "ok")
-}
-
-func (h *Handler) hasRequiredLabels(pr *PullRequest) bool {
-	for _, l := range pr.Labels {
-		if strings.EqualFold(l.Name, "auto-merge") {
-			return true
-		}
-		if strings.EqualFold(l.Name, "auto-update") {
-			return true
-		}
-	}
-	return false
 }
 
 func (h *Handler) respond(w http.ResponseWriter, statusCode int, status string) {
