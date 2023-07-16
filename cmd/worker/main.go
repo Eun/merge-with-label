@@ -8,12 +8,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Eun/merge-with-label/cmd"
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/worker"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
+
+	"github.com/Eun/merge-with-label/cmd"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/worker"
 )
 
 func main() {

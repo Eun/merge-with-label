@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
 	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
 
 type pushWorker struct {

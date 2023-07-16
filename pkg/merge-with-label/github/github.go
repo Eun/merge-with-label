@@ -12,11 +12,12 @@ import (
 	"time"
 
 	gengraphql "github.com/Eun/go-gen-graphql"
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/sanity-io/litter"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 )
 
 const maxBodyBytes = 1024 * 1024 * 16

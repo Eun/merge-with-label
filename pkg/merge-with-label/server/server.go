@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"golang.org/x/exp/slices"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 )
 
 const maxBodyBytes = 1024 * 1024 * 16

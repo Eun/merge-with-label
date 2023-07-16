@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
 
 func (worker *Worker) getAccessToken(

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
 
 type MergeStrategy string

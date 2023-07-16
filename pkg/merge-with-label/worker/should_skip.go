@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"golang.org/x/exp/slices"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
 
 type shouldSkipResult struct {

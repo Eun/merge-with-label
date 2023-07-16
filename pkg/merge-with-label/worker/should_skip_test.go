@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
-	"github.com/rs/zerolog/log"
 )
 
 func Test_shouldSkipBecauseOfReviews(t *testing.T) {
