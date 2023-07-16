@@ -90,26 +90,37 @@ update:
    ```yaml
    version: '3.9'
    services:
-     redis:
-       image: redis
+     nats:
+       image: nats:2.9.20
+       command: ["--js", "-user", "nats", "-pass", "425751fd-62e2-4b73-9e1b-5a9b0dafc5ad"]
        ports:
-         - "6379:6379"
+         - "4222:4222"
    
-     service:
+     server:
        image: ghcr.io/eun/merge-with-label:latest
+       command: "server"
        ports:
          - "8000:8000"
+       environment:
+         PORT: 8000
+         NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+       depends_on:
+         - nats
+   
+     worker:
+       image: ghcr.io/eun/merge-with-label:latest
+       command: "worker"
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
        environment:
-         PORT: 8000
-         REDIS_HOST: redis:6379
+         NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
          APP_ID: <your app id>
          PRIVATE_KEY: /private-key.pem
        depends_on:
-         - redis
+         - server
    ```
-   > Make sure you fill in your app id and provide the private-key.pem file
+   > Make sure you fill in your app id, provide the private-key.pem file
+   > and modify the nats username and password
 5. Point the webhook url to the deployment
 
 
