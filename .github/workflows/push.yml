@@ -22,13 +22,6 @@ jobs:
         with:
           go-version: ${{ steps.go-mod-details.outputs.go_version }}
       -
-        name: Load Build Variables
-        uses: xom9ikk/dotenv@v2
-      -
-        name: Prepare .golangci.yml
-        shell: bash
-        run: envsubst < .golangci.yml > .golangci.yml
-      -
         name: Lint
         uses: golangci/golangci-lint-action@v3.6.0
         with:

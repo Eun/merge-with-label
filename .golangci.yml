@@ -31,7 +31,7 @@ linters-settings:
     # put imports beginning with prefix after 3rd-party packages;
     # only support one prefix
     # if not set, use goimports.local-prefixes
-    local-prefixes: ${GoPackageName}
+    local-prefixes: github.com/Eun/merge-with-label
   gocognit:
     # minimal code complexity to report, 30 by default (but we recommend 10-20)
     min-complexity: 60
@@ -68,7 +68,7 @@ linters-settings:
   goimports:
     # put imports beginning with prefix after 3rd-party packages;
     # it's a comma-separated list of prefixes
-    local-prefixes: ${GoPackageName}
+    local-prefixes: github.com/Eun/merge-with-label
   gomnd:
     settings:
       mnd:
