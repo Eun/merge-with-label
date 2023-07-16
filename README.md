@@ -116,28 +116,31 @@ update:
 ### Fine Tuning Settings
 Following environment variables are available
 
-| Variable                                 | Default Value       |
-|------------------------------------------|---------------------|
-| `AllowedRepositoriesSetting`             | `.*`                |
-| `BotNameSetting`                         | `merge-with-label`  |
-| `StreamNameSetting`                      | `mwl_bot_events`    |
-| `PullRequestSubjectSetting`              | `pull_request`      |
-| `PushSubjectSetting`                     | `push`              |
-| `MessageRetryAttemptsSetting`            | `5`                 |
-| `MessageRetryWaitSetting`                | `15s`               |
-| `RateLimitBucketNameSetting`             | `mwl_rate_limit`    |
-| `RateLimitBucketTTLSetting`              | `24h`               |
-| `RateLimitIntervalSetting`               | `30s`               |
-| `AccessTokensBucketNameSetting`          | `mwl_access_tokens` |
-| `AccessTokensBucketTTLSetting`           | `24h`               |
-| `ConfigsBucketNameSetting`               | `mwl_configs`       |
-| `ConfigsBucketTTLSetting`                | `24h`               |
-| `CheckRunsBucketNameSetting`             | `mwl_check_runs`    |
-| `CheckRunsBucketTTLSetting`              | `10m`               |
-| `DurationBeforeMergeAfterCheckSetting`   | `10s`               |
-| `DurationToWaitAfterUpdateBranchSetting` | `30s`               |
-| `MaxMessageAgeSetting`                   | `10m`               |
-| `MessageChannelSizePerSubjectSetting`    | `64`                |
+| Variable                          | Default Value       |
+|-----------------------------------|---------------------|
+| `AllowedRepositories`             | `.*`                |
+| `BotName`                         | `merge-with-label`  |
+| `StreamName`                      | `mwl_bot_events`    |
+| `PullRequestSubject`              | `pull_request`      |
+| `PushSubject`                     | `push`              |
+| `MessageRetryAttempts`            | `5`                 |
+| `MessageRetryWait`                | `15s`               |
+| `RateLimitBucketName`             | `mwl_rate_limit`    |
+| `RateLimitBucketTTL`              | `24h`               |
+| `RateLimitInterval`               | `30s`               |
+| `AccessTokensBucketName`          | `mwl_access_tokens` |
+| `AccessTokensBucketTTL`           | `24h`               |
+| `ConfigsBucketName`               | `mwl_configs`       |
+| `ConfigsBucketTTL`                | `24h`               |
+| `CheckRunsBucketName`             | `mwl_check_runs`    |
+| `CheckRunsBucketTTL`              | `10m`               |
+| `DurationBeforeMergeAfterCheck`   | `10s`               |
+| `DurationToWaitAfterUpdateBranch` | `30s`               |
+| `MaxMessageAge`                   | `10m`               |
+| `MessageChannelSizePerSubject`    | `64`                |
+
+> Additionally, you can enable debug logging by setting the `DEBUG`
+> environment variable to `true`.
 
 ## Build History
 [![Build history](https://buildstats.info/github/chart/Eun/merge-with-label?branch=master)](https://github.com/Eun/merge-with-label/actions)

@@ -13,7 +13,6 @@ import (
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/worker"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
 )
 
@@ -22,25 +21,30 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	if os.Getenv("DEBUG") != "" {
+		logger = logger.Level(zerolog.DebugLevel)
+	}
+
 	if os.Getenv("APP_ID") == "" {
-		log.Error().Msg("APP_ID is not set")
+		logger.Error().Msg("APP_ID is not set")
 		return
 	}
 
 	appID, err := strconv.ParseInt(os.Getenv("APP_ID"), 10, 64)
 	if err != nil {
-		log.Error().Err(err).Msg("unable to get APP_ID")
+		logger.Error().Err(err).Msg("unable to get APP_ID")
 		return
 	}
 
 	privateKeyFile := os.Getenv("PRIVATE_KEY")
 	if privateKeyFile == "" {
-		log.Error().Msg("PRIVATE_KEY is not set")
+		logger.Error().Msg("PRIVATE_KEY is not set")
 		return
 	}
 	privateKeyBytes, err := os.ReadFile(privateKeyFile)
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("file", privateKeyFile).
 			Msg("unable to read private key")
@@ -49,7 +53,7 @@ func main() {
 
 	nc, err := nats.Connect(os.Getenv("NATS_URL"))
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to connect to nats")
@@ -58,7 +62,7 @@ func main() {
 	defer nc.Close()
 	js, err := nc.JetStream()
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream context")
@@ -69,7 +73,7 @@ func main() {
 		TTL:    cmd.GetSetting[time.Duration](cmd.AccessTokensBucketTTLSetting),
 	})
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream key value bucket for access-tokens")
@@ -81,7 +85,7 @@ func main() {
 		TTL:    cmd.GetSetting[time.Duration](cmd.ConfigsBucketTTLSetting),
 	})
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream key value bucket for configs")
@@ -93,7 +97,7 @@ func main() {
 		TTL:    cmd.GetSetting[time.Duration](cmd.CheckRunsBucketTTLSetting),
 	})
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream key value bucket for configs")
@@ -105,7 +109,7 @@ func main() {
 		TTL:    cmd.GetSetting[time.Duration](cmd.RateLimitBucketTTLSetting),
 	})
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream key value bucket for push rate limit")
@@ -119,7 +123,7 @@ func main() {
 		nats.MaxDeliver(cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting)),
 	)
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream subscriber for push queue")
@@ -127,7 +131,7 @@ func main() {
 	}
 	defer func() {
 		if err := pushSubscription.Unsubscribe(); err != nil {
-			log.Error().Err(err).Msg("unable to unsubscribe from push queue")
+			logger.Error().Err(err).Msg("unable to unsubscribe from push queue")
 		}
 	}()
 
@@ -138,7 +142,7 @@ func main() {
 		nats.MaxDeliver(cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting)),
 	)
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream subscriber for pull_request queue")
@@ -146,12 +150,12 @@ func main() {
 	}
 	defer func() {
 		if err := pullRequestSubscription.Unsubscribe(); err != nil {
-			log.Error().Err(err).Msg("unable to unsubscribe from pull_request queue")
+			logger.Error().Err(err).Msg("unable to unsubscribe from pull_request queue")
 		}
 	}()
 
 	w := worker.Worker{
-		Logger:  &log.Logger,
+		Logger:  &logger,
 		BotName: cmd.GetSetting[string](cmd.BotNameSetting),
 
 		AllowedRepositories: cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
@@ -190,11 +194,11 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		log.Info().Msg("shutting down")
+		logger.Info().Msg("shutting down")
 		_ = w.Shutdown(context.Background())
 	case err := <-errChan:
 		if err != nil {
-			log.Error().Err(err).Msg("unable to consume")
+			logger.Error().Err(err).Msg("unable to consume")
 		}
 	}
 }

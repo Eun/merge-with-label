@@ -14,7 +14,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
 )
 
@@ -23,6 +22,11 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	if os.Getenv("DEBUG") != "" {
+		logger = logger.Level(zerolog.DebugLevel)
+	}
 
 	address := os.Getenv("ADDRESS")
 	if address == "" {
@@ -35,13 +39,13 @@ func main() {
 
 	nc, err := nats.Connect(os.Getenv("NATS_URL"))
 	if err != nil {
-		log.Error().Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to connect to nats")
+		logger.Error().Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to connect to nats")
 		return
 	}
 	defer nc.Close()
 	js, err := nc.JetStream()
 	if err != nil {
-		log.Error().Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to create jetstream context")
+		logger.Error().Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to create jetstream context")
 		return
 	}
 
@@ -57,18 +61,18 @@ func main() {
 
 	info, err := js.StreamInfo(currentStreamConfig.Name)
 	if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
-		log.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to get stream")
+		logger.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to get stream")
 		return
 	}
 	if info != nil {
 		if _, err := js.UpdateStream(currentStreamConfig); err != nil {
-			log.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to update stream")
+			logger.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to update stream")
 			return
 		}
 	} else {
 		_, err = js.AddStream(currentStreamConfig)
 		if err != nil {
-			log.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to add stream")
+			logger.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to add stream")
 			return
 		}
 	}
@@ -78,7 +82,7 @@ func main() {
 		TTL:    cmd.GetSetting[time.Duration](cmd.RateLimitBucketTTLSetting),
 	})
 	if err != nil {
-		log.Error().
+		logger.Error().
 			Err(err).
 			Str("nats_url", os.Getenv("NATS_URL")).
 			Msg("unable to create jetstream key value bucket for push rate limit")
@@ -93,7 +97,7 @@ func main() {
 		ReadHeaderTimeout: 2 * time.Second,  //nolint:gomnd // set ReadHeaderTimeout
 		Handler: &server.Handler{
 			GetLoggerForContext: func(ctx context.Context) *zerolog.Logger {
-				return &log.Logger
+				return &logger
 			},
 			AllowedRepositories: cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
 
@@ -116,11 +120,11 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		log.Info().Msg("shutting down")
+		logger.Info().Msg("shutting down")
 		_ = srv.Shutdown(context.Background())
 	case err := <-errChan:
 		if err != nil {
-			log.Error().Err(err).Msgf("unable to listen on address %s", address)
+			logger.Error().Err(err).Msgf("unable to listen on address %s", address)
 		}
 	}
 }
