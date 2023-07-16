@@ -35,4 +35,4 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           push: true
-          tags: ghcr.io/eun/merge-with-label:latest,ghcr.io/eun/merge-with-label:${{GITHUB_REF_SLUG}}
+          tags: ghcr.io/eun/merge-with-label:latest,ghcr.io/eun/merge-with-label:${{ env.GITHUB_REF_SLUG }}
