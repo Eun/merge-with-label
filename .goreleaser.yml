@@ -1,0 +1,84 @@
+project_name: "${ProjectName}"
+builds:
+  -
+    binary: "${ProjectName}"
+    env:
+      - "CGO_ENABLED=0"
+    goos:
+      - "linux"
+    goarch:
+      - "arm64"
+      - "amd64"
+    ldflags:
+      - -s
+      - -w
+      - -X "${GoPackageName}/cmd/root.version={{.Version}}"
+      - -X "${GoPackageName}/cmd/root.commit={{.Commit}}"
+      - -X "${GoPackageName}/cmd/root.date={{.Date}}"
+      - -X "${GoPackageName}/cmd/root.author=${Author}"
+      - -X "${GoPackageName}/cmd/root.description=${Description}"
+dockers:
+  -
+    # GOOS of the built binaries/packages that should be used.
+    goos: "linux"
+
+    # GOARCH of the built binaries/packages that should be used.
+    goarch: "amd64"
+
+    # GOARM of the built binaries/packages that should be used.
+    goarm: ''
+
+    # IDs to filter the binaries/packages.
+    ids:
+      - "${ProjectName}"
+
+    image_templates:
+      - "${DockerImage}:{{.Tag}}"
+      - "${DockerImage}:{{.Major}}"
+      - "${DockerImage}:{{.Major}}.{{.Minor}}"
+      - "${DockerImage}:latest"
+
+    skip_push: false
+    dockerfile: "Dockerfile"
+
+    # Template of the docker build flags.
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--build-arg=BINARY=${ProjectName}"
+      - "--platform=linux/amd64"
+  -
+    # GOOS of the built binaries/packages that should be used.
+    goos: "linux"
+
+    # GOARCH of the built binaries/packages that should be used.
+    goarch: "arm64"
+
+    # GOARM of the built binaries/packages that should be used.
+    goarm: ''
+
+    # IDs to filter the binaries/packages.
+    ids:
+      - "${ProjectName}"
+
+    image_templates:
+      - "${DockerImage}:{{.Tag}}"
+      - "${DockerImage}:{{.Major}}"
+      - "${DockerImage}:{{.Major}}.{{.Minor}}"
+      - "${DockerImage}:latest"
+
+    skip_push: false
+    dockerfile: "Dockerfile"
+
+    # Template of the docker build flags.
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--build-arg=BINARY=${ProjectName}"
+      - "--platform=linux/arm64"

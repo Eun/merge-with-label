@@ -1,0 +1,30 @@
+version: '3.9'
+services:
+  nats:
+    image: nats
+    command: ["--js", "-user", "nats", "-pass", "425751fd-62e2-4b73-9e1b-5a9b0dafc5ad"]
+    ports:
+      - "4222:4222"
+
+  server:
+    build: .
+    command: "server"
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+    depends_on:
+      - nats
+
+  worker:
+    build: .
+    command: "worker"
+    volumes:
+      - "./private-key.pem:/private-key.pem:ro"
+    environment:
+      NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+      APP_ID: <your app id>
+      PRIVATE_KEY: /private-key.pem
+    depends_on:
+      - server
