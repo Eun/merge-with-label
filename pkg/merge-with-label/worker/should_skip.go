@@ -149,6 +149,19 @@ func (worker *Worker) shouldSkipBecauseOfHistory(cfg *MergeConfigV1) shouldSkipF
 	}
 }
 
+func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetails) string {
+	if len(details.CheckStates) == 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, len(details.CheckStates)+1)
+	lines = append(lines, "## Available Checks")
+	for checkName := range details.CheckStates {
+		lines = append(lines, fmt.Sprintf("- `%s`", checkName))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFunc {
 	return func(_ context.Context, logger *zerolog.Logger, details *github.PullRequestDetails) (shouldSkipResult, error) {
 		statesThatAreSuccess := []string{"NEUTRAL", "SUCCESS", ""}
@@ -199,6 +212,7 @@ func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFu
 			for i := range checksMissing {
 				lines[i] = fmt.Sprintf("no check matches `%s`", checksMissing[i])
 			}
+			lines = append(lines, "", worker.buildAvailableChecksList(details))
 			return shouldSkipResult{
 				SkipAction: true,
 				Title:      "check(s) missing",
@@ -211,6 +225,7 @@ func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFu
 			for i := range checksNotSucceeded {
 				lines[i] = fmt.Sprintf("check `%s` did not succeed (matched by `%s`)", checksNotSucceeded[i].name, checksNotSucceeded[i].check)
 			}
+			lines = append(lines, "", worker.buildAvailableChecksList(details))
 			return shouldSkipResult{
 				SkipAction: true,
 				Title:      "check(s) did not succeeded",
