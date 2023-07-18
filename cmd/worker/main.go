@@ -25,6 +25,7 @@ func main() {
 	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	if os.Getenv("DEBUG") != "" {
 		logger = logger.Level(zerolog.DebugLevel)
+		logger.Debug().Msg("debug logging enabled")
 	}
 
 	if os.Getenv("APP_ID") == "" {
@@ -52,23 +53,28 @@ func main() {
 		return
 	}
 
-	nc, err := nats.Connect(os.Getenv("NATS_URL"))
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = nats.DefaultURL
+	}
+
+	logger.Debug().Msgf("connecting to %s", natsURL)
+	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to connect to nats")
+		logger.Error().Str("nats_url", natsURL).Msg("unable to connect to nats")
 		return
 	}
 	defer nc.Close()
+	logger.Debug().Msgf("connected to %s", natsURL)
+
+	logger.Debug().Msg("creating jetstream context")
 	js, err := nc.JetStream()
 	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream context")
+		logger.Error().Str("nats_url", natsURL).Msg("unable to create jetstream context")
 		return
 	}
+
+	logger.Debug().Msg("creating access_token kv")
 	accessTokensKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: cmd.GetSetting[string](cmd.AccessTokensBucketNameSetting),
 		TTL:    cmd.GetSetting[time.Duration](cmd.AccessTokensBucketTTLSetting),
@@ -80,7 +86,9 @@ func main() {
 			Msg("unable to create jetstream key value bucket for access-tokens")
 		return
 	}
+	logger.Debug().Msg("configured access_token kv")
 
+	logger.Debug().Msg("creating configs kv")
 	configsKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: cmd.GetSetting[string](cmd.ConfigsBucketNameSetting),
 		TTL:    cmd.GetSetting[time.Duration](cmd.ConfigsBucketTTLSetting),
@@ -92,7 +100,9 @@ func main() {
 			Msg("unable to create jetstream key value bucket for configs")
 		return
 	}
+	logger.Debug().Msg("configured configs kv")
 
+	logger.Debug().Msg("creating check_runs kv")
 	checkRunsKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: cmd.GetSetting[string](cmd.CheckRunsBucketNameSetting),
 		TTL:    cmd.GetSetting[time.Duration](cmd.CheckRunsBucketTTLSetting),
@@ -104,7 +114,9 @@ func main() {
 			Msg("unable to create jetstream key value bucket for configs")
 		return
 	}
+	logger.Debug().Msg("configured check_runs kv")
 
+	logger.Debug().Msg("creating ratelimit kv")
 	rateLimitKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: cmd.GetSetting[string](cmd.RateLimitBucketNameSetting),
 		TTL:    cmd.GetSetting[time.Duration](cmd.RateLimitBucketTTLSetting),
@@ -116,7 +128,9 @@ func main() {
 			Msg("unable to create jetstream key value bucket for push rate limit")
 		return
 	}
+	logger.Debug().Msg("configured ratelimit kv")
 
+	logger.Debug().Msg("subscribing to push subject")
 	pushSubscription, err := js.QueueSubscribeSync(
 		cmd.GetSetting[string](cmd.PushSubjectSetting)+".>",
 		"push-worker",
@@ -136,6 +150,7 @@ func main() {
 		}
 	}()
 
+	logger.Debug().Msg("subscribing to pull_request subject")
 	pullRequestSubscription, err := js.QueueSubscribeSync(
 		cmd.GetSetting[string](cmd.PullRequestSubjectSetting)+".>",
 		"pull-request-worker",
@@ -190,6 +205,7 @@ func main() {
 
 	errChan := make(chan error)
 	go func() {
+		logger.Info().Msg("worker started")
 		errChan <- w.Consume()
 	}()
 

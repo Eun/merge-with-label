@@ -27,6 +27,7 @@ func main() {
 	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	if os.Getenv("DEBUG") != "" {
 		logger = logger.Level(zerolog.DebugLevel)
+		logger.Debug().Msg("debug logging enabled")
 	}
 
 	address := os.Getenv("ADDRESS")
@@ -38,15 +39,24 @@ func main() {
 		address = ":8000"
 	}
 
-	nc, err := nats.Connect(os.Getenv("NATS_URL"))
+	natsURL := os.Getenv("NATS_URL")
+	if natsURL == "" {
+		natsURL = nats.DefaultURL
+	}
+
+	logger.Debug().Msgf("connecting to %s", natsURL)
+	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		logger.Error().Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to connect to nats")
+		logger.Error().Str("nats_url", natsURL).Msg("unable to connect to nats")
 		return
 	}
 	defer nc.Close()
+	logger.Debug().Msgf("connected to %s", natsURL)
+
+	logger.Debug().Msg("creating jetstream context")
 	js, err := nc.JetStream()
 	if err != nil {
-		logger.Error().Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to create jetstream context")
+		logger.Error().Str("nats_url", natsURL).Msg("unable to create jetstream context")
 		return
 	}
 
@@ -60,24 +70,29 @@ func main() {
 		MaxAge:    cmd.GetSetting[time.Duration](cmd.MaxMessageAgeSetting),
 	}
 
+	logger.Debug().Msg("getting js info")
 	info, err := js.StreamInfo(currentStreamConfig.Name)
 	if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
-		logger.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to get stream")
+		logger.Error().Err(err).Str("nats_url", natsURL).Msg("unable to get stream")
 		return
 	}
 	if info != nil {
+		logger.Debug().Msg("updating js stream")
 		if _, err := js.UpdateStream(currentStreamConfig); err != nil {
-			logger.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to update stream")
+			logger.Error().Err(err).Str("nats_url", natsURL).Msg("unable to update stream")
 			return
 		}
 	} else {
+		logger.Debug().Msg("adding js stream")
 		_, err = js.AddStream(currentStreamConfig)
 		if err != nil {
-			logger.Error().Err(err).Str("nats_url", os.Getenv("NATS_URL")).Msg("unable to add stream")
+			logger.Error().Err(err).Str("nats_url", natsURL).Msg("unable to add stream")
 			return
 		}
 	}
+	logger.Debug().Msg("js stream is ready")
 
+	logger.Debug().Msg("creating ratelimit kv")
 	rateLimitKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: cmd.GetSetting[string](cmd.RateLimitBucketNameSetting),
 		TTL:    cmd.GetSetting[time.Duration](cmd.RateLimitBucketTTLSetting),
@@ -85,10 +100,11 @@ func main() {
 	if err != nil {
 		logger.Error().
 			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
+			Str("nats_url", natsURL).
 			Msg("unable to create jetstream key value bucket for push rate limit")
 		return
 	}
+	logger.Debug().Msg("configured ratelimit kv")
 
 	srv := http.Server{
 		Addr:              address,
@@ -116,6 +132,7 @@ func main() {
 
 	errChan := make(chan error)
 	go func() {
+		logger.Info().Msgf("listening on %s", address)
 		errChan <- srv.ListenAndServe()
 	}()
 
