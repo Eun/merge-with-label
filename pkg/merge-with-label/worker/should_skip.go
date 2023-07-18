@@ -182,16 +182,16 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 		return checks[i].name < checks[j].name
 	})
 
-	lines := make([]string, 0, len(checks)+1)
-	lines = append(lines, "## Available Checks")
-	lines = append(lines, "| Name | State | Passed? |")
-	lines = append(lines, "| ---- | ----- | ------- |")
+	var sb strings.Builder
+	sb.WriteString("## Available Checks\n")
+	sb.WriteString("| Name | State | Passed? |\n")
+	sb.WriteString("| ---- | ----- | ------- |\n")
 
 	for _, item := range checks {
-		lines = append(lines, fmt.Sprintf("| `%s` | `%s` | %s |", item.name, item.state, item.passed))
+		fmt.Fprintf(&sb,"| `%s` | `%s` | %s |\n", item.name, item.state, item.passed))
 	}
 
-	return strings.Join(lines, "\n")
+	return sb.String()
 }
 
 func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFunc {
