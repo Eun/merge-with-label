@@ -45,7 +45,7 @@ merge:
   #  - "chore:.+"
   # never update pull requests that match one of these labels (regex)
   #ignoreWithLabels:
-  #  - "dont-update"
+  #  - "dont-merge"
 update:
    # specify a list of labels that indicate whether a pull request is eligible
    # for updating (regex)
