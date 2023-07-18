@@ -458,6 +458,7 @@ func GetPullRequestDetails(
 											Nodes []struct {
 												Conclusion string `json:"conclusion"`
 												Name       string `json:"name"`
+												Status     string `json:"status"`
 											} `json:"nodes"`
 										} `json:"checkRuns" graphql:"checkRuns(last:100)"`
 										Conclusion string `json:"conclusion"`
@@ -566,7 +567,11 @@ func GetPullRequestDetails(
 		for _, node := range commit.CheckSuites.Nodes {
 			details.CheckStates[node.App.Name] = node.Conclusion
 			for _, run := range node.CheckRuns.Nodes {
-				details.CheckStates[node.App.Name+"/"+run.Name] = run.Conclusion
+				if run.Status == "COMPLETED" {
+					details.CheckStates[node.App.Name+"/"+run.Name] = run.Conclusion
+				} else {
+					details.CheckStates[node.App.Name+"/"+run.Name] = "PENDING"
+				}
 			}
 		}
 	}

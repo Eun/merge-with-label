@@ -169,6 +169,9 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 		if slices.Index(statesThatAreSuccess, state) == -1 {
 			passed = "❌"
 		}
+		if state == "" {
+			state = "‎"
+		}
 		checks = append(checks, check{
 			name:   name,
 			state:  state,
@@ -182,8 +185,8 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 
 	var sb strings.Builder
 	sb.WriteString("## Available Checks\n")
-	sb.WriteString("| Name | State | Passed? |\n")
-	sb.WriteString("| ---- | ----- | ------- |\n")
+	sb.WriteString("| Name | State | Good Enough For Merge? |\n")
+	sb.WriteString("| ---- | ----- | ---------------------- |\n")
 
 	for _, item := range checks {
 		fmt.Fprintf(&sb, "| `%s` | `%s` | %s |\n", item.name, item.state, item.passed)
