@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ type shouldSkipResult struct {
 	Title      string
 	Summary    string
 }
+
+var statesThatAreSuccess = []string{"NEUTRAL", "SUCCESS", ""}
 
 type shouldSkipFunc func(ctx context.Context, logger *zerolog.Logger, details *github.PullRequestDetails) (shouldSkipResult, error)
 
@@ -154,17 +157,45 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 		return ""
 	}
 
-	lines := make([]string, 0, len(details.CheckStates)+1)
-	lines = append(lines, "## Available Checks")
-	for checkName := range details.CheckStates {
-		lines = append(lines, fmt.Sprintf("- `%s`", checkName))
+	type check struct {
+		name   string
+		state  string
+		passed string
 	}
+
+	checks := make([]check, 0, len(details.CheckStates))
+	for name, state := range details.CheckStates {
+		passed := "❌"
+
+		if slices.Index(statesThatAreSuccess, state) == -1 {
+			passed = "✅"
+		}
+
+		checks = append(checks, check{
+			name:   name,
+			state:  state,
+			passed: passed,
+		})
+	}
+
+	sort.Slice(checks, func(i, j int) bool {
+		return checks[i].name < checks[j].name
+	})
+
+	lines := make([]string, 0, len(checks)+1)
+	lines = append(lines, "## Available Checks")
+	lines = append(lines, "| Name | State | Passed? |")
+	lines = append(lines, "| ---- | ----- | ------- |")
+
+	for _, item := range checks {
+		lines = append(lines, fmt.Sprintf("| `%s` | `%s` | %s |", item.name, item.state, item.passed))
+	}
+
 	return strings.Join(lines, "\n")
 }
 
 func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFunc {
 	return func(_ context.Context, logger *zerolog.Logger, details *github.PullRequestDetails) (shouldSkipResult, error) {
-		statesThatAreSuccess := []string{"NEUTRAL", "SUCCESS", ""}
 
 		if len(cfg.RequiredChecks) == 0 {
 			return shouldSkipResult{
