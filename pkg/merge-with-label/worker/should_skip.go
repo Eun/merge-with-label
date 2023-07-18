@@ -165,12 +165,10 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 
 	checks := make([]check, 0, len(details.CheckStates))
 	for name, state := range details.CheckStates {
-		passed := "❌"
-
+		passed := "✅"
 		if slices.Index(statesThatAreSuccess, state) == -1 {
-			passed = "✅"
+			passed = "❌"
 		}
-
 		checks = append(checks, check{
 			name:   name,
 			state:  state,
