@@ -188,7 +188,7 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 	sb.WriteString("| ---- | ----- | ------- |\n")
 
 	for _, item := range checks {
-		fmt.Fprintf(&sb,"| `%s` | `%s` | %s |\n", item.name, item.state, item.passed))
+		fmt.Fprintf(&sb, "| `%s` | `%s` | %s |\n", item.name, item.state, item.passed)
 	}
 
 	return sb.String()
@@ -196,7 +196,6 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 
 func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFunc {
 	return func(_ context.Context, logger *zerolog.Logger, details *github.PullRequestDetails) (shouldSkipResult, error) {
-
 		if len(cfg.RequiredChecks) == 0 {
 			return shouldSkipResult{
 				SkipAction: false,
