@@ -93,8 +93,6 @@ update:
      nats:
        image: nats:2.9.20
        command: ["--js", "-user", "nats", "-pass", "425751fd-62e2-4b73-9e1b-5a9b0dafc5ad"]
-       ports:
-         - "4222:4222"
    
      server:
        image: ghcr.io/eun/merge-with-label:latest
