@@ -41,7 +41,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Redirect(w, r, "https://github.com/apps/merge-with-label", http.StatusTemporaryRedirect)
+		http.Redirect(w, r, "https://github.com/Eun/merge-with-label", http.StatusTemporaryRedirect)
 		return
 	}
 
@@ -83,9 +83,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
-		PullRequests []struct {
-			Number int64 `json:"number"`
-		} `json:"pull_requests"`
+		CheckRun struct {
+			PullRequests []struct {
+				Number int64 `json:"number"`
+			} `json:"pull_requests"`
+		} `json:"check_run"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error().Err(err).Msg("unable to decode request")
@@ -110,8 +112,8 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		return
 	}
 
-	for i := range req.PullRequests {
-		if req.PullRequests[i].Number == 0 {
+	for i := range req.CheckRun.PullRequests {
+		if req.CheckRun.PullRequests[i].Number == 0 {
 			logger.Debug().Msgf("no pull_requests.%d.number present in request", i)
 			continue
 		}
@@ -127,7 +129,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 				OwnerName: req.Repository.Owner.Login,
 			},
 			&common.PullRequest{
-				Number: req.PullRequests[i].Number,
+				Number: req.CheckRun.PullRequests[i].Number,
 			})
 		if err != nil {
 			logger.Error().Err(err).Msg("unable to queue message")
