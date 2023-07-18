@@ -170,7 +170,7 @@ func (worker *Worker) buildAvailableChecksList(details *github.PullRequestDetail
 			passed = "❌"
 		}
 		if state == "" {
-			state = "‎" // empty char, do not delete
+			state = "\u200e" // empty char, do not delete
 		}
 		checks = append(checks, check{
 			name:   name,
