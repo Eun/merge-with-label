@@ -186,22 +186,29 @@ func GetAccessToken(
 	installationID int64,
 ) (*AccessToken, error) {
 	var body bytes.Buffer
+
+	type Permissions struct {
+		Actions      string `json:"actions"`
+		Checks       string `json:"checks"`
+		Contents     string `json:"contents"`
+		Metadata     string `json:"metadata"`
+		PullRequests string `json:"pull_requests"`
+		Statuses     string `json:"statuses"`
+		Workflows    string `json:"workflows"`
+	}
+
 	err := json.NewEncoder(&body).Encode(struct {
-		Repository  string `json:"repository"`
-		Permissions struct {
-			PullRequests string `json:"pull_requests"`
-			Contents     string `json:"contents"`
-			Workflows    string `json:"workflows"`
-		}
+		Repository  string      `json:"repository"`
+		Permissions Permissions `json:"permissions"`
 	}{
 		Repository: repository.FullName,
-		Permissions: struct {
-			PullRequests string `json:"pull_requests"`
-			Contents     string `json:"contents"`
-			Workflows    string `json:"workflows"`
-		}{
-			PullRequests: "write",
+		Permissions: Permissions{
+			Actions:      "read",
+			Checks:       "write",
 			Contents:     "write",
+			Metadata:     "read",
+			PullRequests: "write",
+			Statuses:     "read",
 			Workflows:    "write",
 		},
 	})
@@ -629,6 +636,9 @@ func GetPullRequestDetails(
 		}
 
 		for _, node := range commit.CheckSuites.Nodes {
+			if node.App.Name == "" {
+				continue
+			}
 			details.CheckStates[node.App.Name] = node.Conclusion
 			for _, run := range node.CheckRuns.Nodes {
 				if run.Status == "COMPLETED" {
