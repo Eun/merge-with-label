@@ -68,7 +68,7 @@ update:
 ```
 
 ## Setup
- Create a new github app with following permissions & events
+1. Create a new github app with following permissions & events
    ### Repository Permissions
    | Permission      | Level          |
    |-----------------|----------------|
