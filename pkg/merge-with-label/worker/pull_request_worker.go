@@ -214,6 +214,22 @@ func (worker *pullRequestWorker) updatePullRequest(
 		return false, false, errors.WithStack(err)
 	}
 	if err := github.UpdatePullRequest(ctx, worker.HTTPClient, accessToken, details.ID, details.LastCommitSha); err != nil {
+		var graphQLErrors github.GraphQLErrors
+		if errors.As(err, &graphQLErrors) {
+			if err := worker.CreateOrUpdateCheckRun(
+				ctx,
+				rootLogger,
+				accessToken,
+				repository,
+				details.ID,
+				details.LastCommitSha,
+				"COMPLETED",
+				"error during update",
+				graphQLErrors.Error(),
+			); err != nil {
+				return false, false, errors.WithStack(err)
+			}
+		}
 		return false, false, errors.Wrap(err, "error updating pull request")
 	}
 
@@ -305,6 +321,22 @@ func (worker *pullRequestWorker) mergePullRequest(
 		details.LastCommitSha,
 		cfg.Merge.Strategy.GithubString(),
 	); err != nil {
+		var graphQLErrors github.GraphQLErrors
+		if errors.As(err, &graphQLErrors) {
+			if err := worker.CreateOrUpdateCheckRun(
+				ctx,
+				rootLogger,
+				accessToken,
+				repository,
+				details.ID,
+				details.LastCommitSha,
+				"COMPLETED",
+				"error during merge",
+				graphQLErrors.Error(),
+			); err != nil {
+				return false, false, errors.WithStack(err)
+			}
+		}
 		return false, false, errors.Wrap(err, "unable to merge pull request")
 	}
 	return false, true, nil

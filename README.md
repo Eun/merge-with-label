@@ -15,12 +15,12 @@ Place `merge-with-label.yml` in `.github` repository:
 ```yaml
 version: 1
 merge:
-   # specify a list of labels that indicate whether a pull request is eligible
-   # for merging (regex)
-   # (or-list, only one label must be present on a pull request)
-   # (leave empty to disable the merge feature)
+  # specify a list of labels that indicate whether a pull request is eligible
+  # for merging (regex)
+  # (or-list, only one label must be present on a pull request)
+  # (leave empty to disable the merge feature)
   labels:
-   - "merge"
+    - "merge"
   # strategy to merge (can be "commit", "squash" or "rebase")
   strategy: "squash"
   # amount of required approvals before merging
@@ -47,12 +47,12 @@ merge:
   #ignoreWithLabels:
   #  - "dont-merge"
 update:
-   # specify a list of labels that indicate whether a pull request is eligible
-   # for updating (regex)
-   # (or-list, only one label must be present on a pull request)
-   # (leave empty to disable the update feature)
+  # specify a list of labels that indicate whether a pull request is eligible
+  # for updating (regex)
+  # (or-list, only one label must be present on a pull request)
+  # (leave empty to disable the update feature)
   labels: 
-   - "update-branch"
+    - "update-branch"
   # never update pull requests that were created by these users (regex)
   ignoreFromUsers:
     - "dependabot"
@@ -72,7 +72,7 @@ update:
    ### Repository Permissions
    | Permission    | Level          |
    |---------------|----------------|
-   | Checks        | Read-Only      |
+   | Checks        | Read and write |
    | Contents      | Read and write |
    | Metadata      | Read-Only      |
    | Pull requests | Read and write |

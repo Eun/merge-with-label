@@ -15,7 +15,6 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
-	"github.com/sanity-io/litter"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 )
@@ -55,6 +54,14 @@ func (e *ResponseError) MarshalZerologObject(ev *zerolog.Event) {
 		ev.Int("expected_status_code", e.ExpectedStatusCode)
 	}
 	ev.Err(e.NextError)
+}
+
+type GraphQLErrors struct {
+	Errors []string
+}
+
+func (g GraphQLErrors) Error() string {
+	return strings.Join(g.Errors, "\n")
 }
 
 func doGraphQLRequest(ctx context.Context, client *http.Client, token, query string, variables any) ([]byte, error) {
@@ -113,8 +120,12 @@ func doGraphQLRequest(ctx context.Context, client *http.Client, token, query str
 		})
 	}
 
-	if len(response.Errors) > 0 {
-		return nil, errors.Errorf("error during query: %s", litter.Sdump(response.Errors))
+	if size := len(response.Errors); size > 0 {
+		errorStrings := make([]string, size)
+		for i := 0; i < size; i++ {
+			errorStrings[i] = response.Errors[i].Message
+		}
+		return nil, GraphQLErrors{Errors: errorStrings}
 	}
 
 	return response.Data, nil
