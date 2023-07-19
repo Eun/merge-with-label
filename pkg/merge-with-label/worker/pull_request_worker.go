@@ -225,7 +225,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 				details.LastCommitSha,
 				"COMPLETED",
 				"error during update",
-				graphQLErrors.Error(),
+				graphQLErrors.GetMessages(),
 			); err != nil {
 				return false, false, errors.WithStack(err)
 			}
@@ -332,7 +332,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 				details.LastCommitSha,
 				"COMPLETED",
 				"error during merge",
-				graphQLErrors.Error(),
+				graphQLErrors.GetMessages(),
 			); err != nil {
 				return false, false, errors.WithStack(err)
 			}

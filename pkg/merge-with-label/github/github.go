@@ -56,12 +56,46 @@ func (e *ResponseError) MarshalZerologObject(ev *zerolog.Event) {
 	ev.Err(e.NextError)
 }
 
-type GraphQLErrors struct {
-	Errors []string
+type GraphQLError struct {
+	Type    string `json:"type"`
+	Path    string `json:"path"`
+	Message string `json:"message"`
 }
 
+func (g GraphQLError) String() string {
+	return fmt.Sprintf("type=%s path=%s message=%s",
+		g.Type,
+		g.Path,
+		g.Message,
+	)
+}
+
+type GraphQLErrors []GraphQLError
+
 func (g GraphQLErrors) Error() string {
-	return strings.Join(g.Errors, "\n")
+	lines := make([]string, len(g))
+	for i, err := range g {
+		lines[i] = err.String()
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (g GraphQLErrors) GetMessages() string {
+	lines := make([]string, len(g))
+	for i, err := range g {
+		lines[i] = err.Message
+	}
+	return strings.Join(lines, "\n")
+}
+
+func joinPath(p []any) string {
+	lines := make([]string, len(p))
+
+	for i, a := range p {
+		lines[i] = fmt.Sprintf("%v", a)
+	}
+
+	return strings.Join(lines, ".")
 }
 
 func doGraphQLRequest(ctx context.Context, client *http.Client, token, query string, variables any) ([]byte, error) {
@@ -106,8 +140,10 @@ func doGraphQLRequest(ctx context.Context, client *http.Client, token, query str
 	}
 	var response struct {
 		Errors []struct {
+			Type    string `json:"type"`
+			Path    []any  `json:"path"`
 			Message string `json:"message"`
-		}
+		} `json:"errors"`
 		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body.Bytes(), &response); err != nil {
@@ -121,11 +157,16 @@ func doGraphQLRequest(ctx context.Context, client *http.Client, token, query str
 	}
 
 	if size := len(response.Errors); size > 0 {
-		errorStrings := make([]string, size)
-		for i := 0; i < size; i++ {
-			errorStrings[i] = response.Errors[i].Message
+		graphQLErrors := make(GraphQLErrors, len(response.Errors))
+		for i, s := range response.Errors {
+			graphQLErrors[i] = GraphQLError{
+				Type:    s.Type,
+				Path:    joinPath(s.Path),
+				Message: s.Message,
+			}
 		}
-		return nil, GraphQLErrors{Errors: errorStrings}
+
+		return response.Data, graphQLErrors
 	}
 
 	return response.Data, nil
@@ -526,7 +567,19 @@ func GetPullRequestDetails(
 		"branch": baseName,
 	})
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to get latest pull request details")
+		var graphQLErrors GraphQLErrors
+		if !errors.As(err, &graphQLErrors) {
+			return nil, errors.Wrap(err, "unable to get latest pull request details")
+		}
+
+		ignoredErrorPaths := []string{"repository.pullRequest.commits.nodes.0.commit.checkSuites.nodes"}
+		for _, e := range graphQLErrors {
+			for _, path := range ignoredErrorPaths {
+				if !strings.HasPrefix(e.Path, path) {
+					return nil, errors.Wrap(err, "unable to get latest pull request details")
+				}
+			}
+		}
 	}
 
 	if err := json.Unmarshal(buf, &response.Data); err != nil {
