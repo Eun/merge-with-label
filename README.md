@@ -70,13 +70,15 @@ update:
 ## Setup
 1. Create a new github app with following permissions & events
    ### Repository Permissions
-   | Permission    | Level          |
-   |---------------|----------------|
-   | Checks        | Read and write |
-   | Contents      | Read and write |
-   | Metadata      | Read-Only      |
-   | Pull requests | Read and write |
-   | Workflows     | Read and write |
+   | Permission      | Level          |
+   |-----------------|----------------|
+   | Actions         | Read           |
+   | Checks          | Read and write |
+   | Commit statuses | Read-Only      |
+   | Contents        | Read and write |
+   | Metadata        | Read-Only      |
+   | Pull requests   | Read and write |
+   | Workflows       | Read and write |
 
    ### Subscribe to events 
    - Check run
