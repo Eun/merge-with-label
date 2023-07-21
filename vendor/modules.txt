@@ -30,7 +30,7 @@ github.com/mattn/go-colorable
 github.com/mattn/go-isatty
 # github.com/nats-io/nats-server/v2 v2.9.19
 ## explicit; go 1.19
-# github.com/nats-io/nats.go v1.27.1
+# github.com/nats-io/nats.go v1.28.0
 ## explicit; go 1.19
 github.com/nats-io/nats.go
 github.com/nats-io/nats.go/encoders/builtin
@@ -52,11 +52,6 @@ github.com/rs/zerolog/internal/cbor
 github.com/rs/zerolog/internal/json
 github.com/rs/zerolog/log
 github.com/rs/zerolog/pkgerrors
-# github.com/sanity-io/litter v1.5.5
-## explicit; go 1.16
-github.com/sanity-io/litter
-# github.com/stretchr/testify v1.7.0
-## explicit; go 1.13
 # golang.org/x/crypto v0.9.0
 ## explicit; go 1.17
 golang.org/x/crypto/blake2b
