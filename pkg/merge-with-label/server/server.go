@@ -24,8 +24,9 @@ var _ http.Handler = &Handler{}
 type GetLoggerForContext func(ctx context.Context) *zerolog.Logger
 
 type Handler struct {
-	GetLoggerForContext GetLoggerForContext
-	AllowedRepositories common.RegexSlice
+	GetLoggerForContext         GetLoggerForContext
+	AllowedRepositories         common.RegexSlice
+	AllowOnlyPublicRepositories bool
 
 	JetStreamContext   nats.JetStreamContext
 	PullRequestSubject string
@@ -106,6 +107,12 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		return
 	}
 
+	if h.AllowOnlyPublicRepositories && req.Repository.Private {
+		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
 	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
 		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
 		h.respond(w, http.StatusOK, "ok")
@@ -127,6 +134,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 				FullName:  req.Repository.FullName,
 				Name:      req.Repository.Name,
 				OwnerName: req.Repository.Owner.Login,
+				Private:   req.Repository.Private,
 			},
 			&common.PullRequest{
 				Number: req.CheckRun.PullRequests[i].Number,
@@ -183,6 +191,12 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 		return
 	}
 
+	if h.AllowOnlyPublicRepositories && req.Repository.Private {
+		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
 	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
 		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
 		h.respond(w, http.StatusOK, "ok")
@@ -198,6 +212,7 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 			FullName:  req.Repository.FullName,
 			Name:      req.Repository.Name,
 			OwnerName: req.Repository.Owner.Login,
+			Private:   req.Repository.Private,
 		},
 		&common.PullRequest{
 			Number: req.PullRequest.Number,
@@ -253,6 +268,12 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 		return
 	}
 
+	if h.AllowOnlyPublicRepositories && req.Repository.Private {
+		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
 	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
 		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
 		h.respond(w, http.StatusOK, "ok")
@@ -268,6 +289,7 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 			FullName:  req.Repository.FullName,
 			Name:      req.Repository.Name,
 			OwnerName: req.Repository.Owner.Login,
+			Private:   req.Repository.Private,
 		},
 		&common.PullRequest{
 			Number: req.PullRequest.Number,
@@ -296,6 +318,12 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 		return
 	}
 
+	if h.AllowOnlyPublicRepositories && req.Repository.Private {
+		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
 	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
 		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
 		h.respond(w, http.StatusOK, "ok")
@@ -316,6 +344,7 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 				FullName:  req.Repository.FullName,
 				Name:      req.Repository.Name,
 				OwnerName: req.Repository.Owner.Login,
+				Private:   req.Repository.Private,
 			},
 		})
 	if err != nil {

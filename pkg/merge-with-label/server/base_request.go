@@ -16,6 +16,7 @@ type BaseRequest struct {
 		Owner    struct {
 			Login string `json:"login"`
 		} `json:"owner"`
+		Private bool `json:"private"`
 	} `json:"repository"`
 }
 

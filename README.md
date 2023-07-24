@@ -130,6 +130,7 @@ Following environment variables are available
 | Variable                          | Default Value       |
 |-----------------------------------|---------------------|
 | `AllowedRepositories`             | `.*`                |
+| `AllowOnlyPublicRepositories`     | `false`             |
 | `BotName`                         | `merge-with-label`  |
 | `StreamName`                      | `mwl_bot_events`    |
 | `PullRequestSubject`              | `pull_request`      |

@@ -16,7 +16,8 @@ type Worker struct {
 	Logger  *zerolog.Logger
 	BotName string
 
-	AllowedRepositories common.RegexSlice
+	AllowedRepositories         common.RegexSlice
+	AllowOnlyPublicRepositories bool
 
 	PushSubscription        *nats.Subscription
 	PullRequestSubscription *nats.Subscription

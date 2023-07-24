@@ -174,7 +174,8 @@ func main() {
 		Logger:  &logger,
 		BotName: cmd.GetSetting[string](cmd.BotNameSetting),
 
-		AllowedRepositories: cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
+		AllowedRepositories:         cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
+		AllowOnlyPublicRepositories: cmd.GetSetting[bool](cmd.AllowOnlyPublicRepositories),
 
 		PushSubscription:        pushSubscription,
 		PullRequestSubscription: pullRequestSubscription,

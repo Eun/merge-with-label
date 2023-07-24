@@ -1,4 +1,8 @@
 linters-settings:
+  exhaustruct:
+    include:
+      - 'common.*'
+
   dogsled:
     # checks assignments with too many blank identifiers; default is 2
     max-blank-identifiers: 2
@@ -139,6 +143,7 @@ linters:
     - dupl
     - errcheck
     - exhaustive
+    - exhaustruct
     - exportloopref
     - funlen
     - gochecknoinits

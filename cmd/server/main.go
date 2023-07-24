@@ -116,7 +116,8 @@ func main() {
 			GetLoggerForContext: func(ctx context.Context) *zerolog.Logger {
 				return &logger
 			},
-			AllowedRepositories: cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
+			AllowedRepositories:         cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
+			AllowOnlyPublicRepositories: cmd.GetSetting[bool](cmd.AllowOnlyPublicRepositories),
 
 			JetStreamContext:   js,
 			PullRequestSubject: cmd.GetSetting[string](cmd.PullRequestSubjectSetting),
