@@ -15,6 +15,7 @@ type Setting string
 
 const (
 	AllowedRepositoriesSetting             Setting = "AllowedRepositories"
+	AllowOnlyPublicRepositories            Setting = "AllowOnlyPublicRepositories"
 	BotNameSetting                         Setting = "BotName"
 	StreamNameSetting                      Setting = "StreamName"
 	PullRequestSubjectSetting              Setting = "PullRequestSubject"
@@ -38,6 +39,7 @@ const (
 
 var defaultSettings = map[Setting]any{
 	AllowedRepositoriesSetting:             common.RegexSlice{common.MustNewRegexItem(".*")},
+	AllowOnlyPublicRepositories:            false,
 	BotNameSetting:                         "merge-with-label",
 	StreamNameSetting:                      "mwl_bot_events",
 	PullRequestSubjectSetting:              "pull_request",
@@ -87,6 +89,10 @@ func convertValue(value string, targetType reflect.Type) reflect.Value {
 		return reflect.ValueOf(t)
 	}
 	switch targetType.Kind() {
+	case reflect.Bool:
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return reflect.ValueOf(boolValue).Convert(targetType)
+		}
 	case reflect.String:
 		return reflect.ValueOf(value)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:

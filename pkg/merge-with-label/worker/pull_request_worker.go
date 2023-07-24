@@ -31,6 +31,14 @@ func (worker *pullRequestWorker) handleMessage(logger *zerolog.Logger, msg *nats
 		return
 	}
 
+	if worker.AllowOnlyPublicRepositories && m.Repository.Private {
+		logger.Warn().Str("repo", m.Repository.FullName).Msg("repository is not allowed (it is private)")
+		if err := msg.Ack(); err != nil {
+			logger.Error().Err(err).Msg("unable to ack message")
+		}
+		return
+	}
+
 	if worker.AllowedRepositories.ContainsOneOf(m.Repository.FullName) == "" {
 		logger.Warn().Str("repo", m.Repository.FullName).Msg("repository is not allowed")
 		if err := msg.Ack(); err != nil {
