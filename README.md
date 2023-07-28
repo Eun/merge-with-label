@@ -1,6 +1,6 @@
 # merge-with-label
 [![Actions Status](https://github.com/Eun/merge-with-label/workflows/push/badge.svg)](https://github.com/Eun/merge-with-label/actions)
-[![Coverage Status](https://coveralls.io/repos/github/Eun/merge-with-label/badge.svg?branch=master)](https://coveralls.io/github/Eun/merge-with-label?branch=master)
+[![Coverage Status](https://coveralls.io/repos/github/Eun/merge-with-label/badge.svg?branch=main)](https://coveralls.io/github/Eun/merge-with-label?branch=main)
 [![PkgGoDev](https://img.shields.io/badge/pkg.go.dev-reference-blue)](https://pkg.go.dev/github.com/Eun/merge-with-label)
 [![go-report](https://goreportcard.com/badge/github.com/Eun/merge-with-label)](https://goreportcard.com/report/github.com/Eun/merge-with-label)
 ---
