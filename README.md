@@ -1,6 +1,7 @@
 <p align="center">
   <img width="829" height="170" src="header.png">
 </p>
+
 [![Actions Status](https://github.com/Eun/merge-with-label/workflows/push/badge.svg)](https://github.com/Eun/merge-with-label/actions)
 [![Coverage Status](https://coveralls.io/repos/github/Eun/merge-with-label/badge.svg?branch=master)](https://coveralls.io/github/Eun/merge-with-label?branch=master)
 [![PkgGoDev](https://img.shields.io/badge/pkg.go.dev-reference-blue)](https://pkg.go.dev/github.com/Eun/merge-with-label)
