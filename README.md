@@ -97,10 +97,12 @@ update:
    services:
      nats:
        image: nats:2.9.20
+       restart: unless-stopped
        command: ["--js", "-user", "nats", "-pass", "425751fd-62e2-4b73-9e1b-5a9b0dafc5ad"]
    
      server:
        image: ghcr.io/eun/merge-with-label:latest
+       restart: unless-stopped
        command: "server"
        ports:
          - "8000:8000"
@@ -112,6 +114,7 @@ update:
    
      worker:
        image: ghcr.io/eun/merge-with-label:latest
+       restart: unless-stopped
        command: "worker"
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
