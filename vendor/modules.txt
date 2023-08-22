@@ -6,7 +6,7 @@ github.com/Eun/go-gen-graphql
 github.com/golang-jwt/jwt/v4
 # github.com/golang/protobuf v1.5.3
 ## explicit; go 1.9
-# github.com/google/uuid v1.3.0
+# github.com/google/uuid v1.3.1
 ## explicit
 github.com/google/uuid
 # github.com/hashicorp/errwrap v1.0.0
