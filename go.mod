@@ -5,7 +5,7 @@ go 1.20
 require (
 	github.com/Eun/go-gen-graphql v0.0.3
 	github.com/golang-jwt/jwt/v4 v4.5.0
-	github.com/google/uuid v1.3.0
+	github.com/google/uuid v1.3.1
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/nats-io/nats.go v1.28.0
 	github.com/pkg/errors v0.9.1
