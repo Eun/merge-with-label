@@ -7,7 +7,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/google/uuid v1.3.1
 	github.com/hashicorp/go-multierror v1.1.1
-	github.com/nats-io/nats.go v1.28.0
+	github.com/nats-io/nats.go v1.29.0
 	github.com/pkg/errors v0.9.1
 	github.com/rs/zerolog v1.30.0
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df
