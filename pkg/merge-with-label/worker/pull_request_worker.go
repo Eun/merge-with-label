@@ -169,7 +169,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 	}
 
 	if details.HasConflicts {
-		worker.Logger.Info().Msg("not updating: pull request has conflicts")
+		rootLogger.Info().Msg("not updating: pull request has conflicts")
 		if err := worker.CreateOrUpdateCheckRun(
 			ctx,
 			rootLogger,
@@ -186,7 +186,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 		return true, false, nil
 	}
 
-	result, err := worker.shouldSkipUpdate(ctx, worker.Logger, cfg, details)
+	result, err := worker.shouldSkipUpdate(ctx, rootLogger, cfg, details)
 	if err != nil {
 		return false, false, errors.WithStack(err)
 	}
@@ -207,7 +207,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 		return true, false, nil
 	}
 
-	worker.Logger.Info().Msg("updating pull request")
+	rootLogger.Info().Msg("updating pull request")
 	if err := worker.CreateOrUpdateCheckRun(
 		ctx,
 		rootLogger,
@@ -269,7 +269,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 		return false, false, nil
 	}
 	if !details.IsMergeable {
-		worker.Logger.Debug().Msg("pull request not mergeable")
+		rootLogger.Debug().Msg("pull request not mergeable")
 		if err := worker.CreateOrUpdateCheckRun(
 			ctx,
 			rootLogger,
@@ -285,7 +285,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 		return true, false, nil
 	}
 
-	result, err := worker.shouldSkipMerge(ctx, worker.Logger, cfg, details)
+	result, err := worker.shouldSkipMerge(ctx, rootLogger, cfg, details)
 	if err != nil {
 		return false, false, errors.WithStack(err)
 	}
@@ -306,7 +306,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 		return true, false, nil
 	}
 
-	worker.Logger.Info().Msg("merging pull request")
+	rootLogger.Info().Msg("merging pull request")
 	if err := worker.CreateOrUpdateCheckRun(
 		ctx,
 		rootLogger,
