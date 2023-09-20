@@ -37,6 +37,7 @@ func (worker *Worker) shouldSkipMerge(
 		worker.shouldSkipBecauseOfHistory(&cfg.Merge),
 		worker.shouldSkipBecauseOfReviews(&cfg.Merge),
 		worker.shouldSkipBecauseOfChecks(&cfg.Merge),
+		worker.shouldSkipBecauseIsNotMergeable(&cfg.Merge),
 	}
 
 	for i := range conditions {
@@ -319,5 +320,25 @@ func (worker *Worker) shouldSkipBecauseOfReviews(cfg *MergeConfigV1) shouldSkipF
 			}
 		}
 		return shouldSkipResult{SkipAction: false}, nil
+	}
+}
+
+func (worker *Worker) shouldSkipBecauseIsNotMergeable(cfg *MergeConfigV1) shouldSkipFunc {
+	return func(_ context.Context, logger *zerolog.Logger, details *github.PullRequestDetails) (shouldSkipResult, error) {
+		if details.IsMergeable {
+			return shouldSkipResult{SkipAction: false}, nil
+		}
+
+		if diff := time.Until(details.LastCommitTime.Add(worker.DurationBeforeMergeAfterCheck)); diff > 0 {
+			// it's a bit too early. block merging, push back onto the queue
+			logger.Debug().Msg("pull request not mergeable, but the the last commit is too recent, retrying")
+			return shouldSkipResult{SkipAction: false}, pushBackError{delay: diff}
+		}
+		logger.Debug().Msg("pull request not mergeable")
+		return shouldSkipResult{
+			SkipAction: true,
+			Title:      "not merging",
+			Summary:    "pull request is not mergeable",
+		}, nil
 	}
 }
