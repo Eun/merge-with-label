@@ -264,7 +264,7 @@ func (worker *Worker) shouldSkipBecauseOfChecks(cfg *MergeConfigV1) shouldSkipFu
 			}, nil
 		}
 
-		if diff := time.Until(details.LastCommitTime.Add(worker.DurationToWaitAfterUpdateBranch)); diff > 0 {
+		if diff := time.Until(details.LastCommitTime.Add(worker.DurationBeforeMergeAfterCheck)); diff > 0 {
 			// it's a bit too early. block merging, push back onto the queue
 			logger.Debug().Msg("delaying merge, because commit was too recent")
 			return shouldSkipResult{SkipAction: false}, pushBackError{delay: diff}
