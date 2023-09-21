@@ -268,22 +268,6 @@ func (worker *pullRequestWorker) mergePullRequest(
 	if cfg.Merge.Labels.ContainsOneOf(details.Labels...) == "" {
 		return false, false, nil
 	}
-	if !details.IsMergeable {
-		rootLogger.Debug().Msg("pull request not mergeable")
-		if err := worker.CreateOrUpdateCheckRun(
-			ctx,
-			rootLogger,
-			accessToken,
-			repository,
-			details.ID,
-			details.LastCommitSha,
-			"COMPLETED",
-			"not merging: pull request is not mergeable", "",
-		); err != nil {
-			return false, false, errors.WithStack(err)
-		}
-		return true, false, nil
-	}
 
 	result, err := worker.shouldSkipMerge(ctx, rootLogger, cfg, details)
 	if err != nil {
