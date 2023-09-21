@@ -323,7 +323,7 @@ func (worker *Worker) shouldSkipBecauseOfReviews(cfg *MergeConfigV1) shouldSkipF
 	}
 }
 
-func (worker *Worker) shouldSkipBecauseIsNotMergeable(cfg *MergeConfigV1) shouldSkipFunc {
+func (worker *Worker) shouldSkipBecauseIsNotMergeable(*MergeConfigV1) shouldSkipFunc {
 	return func(_ context.Context, logger *zerolog.Logger, details *github.PullRequestDetails) (shouldSkipResult, error) {
 		if details.IsMergeable {
 			return shouldSkipResult{SkipAction: false}, nil
