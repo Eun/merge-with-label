@@ -296,7 +296,12 @@ func MergePullRequest(
 	commitHeadline string,
 ) error {
 	_, err := doGraphQLRequest(ctx, client, token, `
-mutation MergePulLRequest($pullRequestId: ID!, $expectedHeadOid: GitObjectID!, $mergeMethod: PullRequestMergeMethod!, $commitHeadline: String!){ 
+mutation MergePulLRequest(
+  $pullRequestId: ID!,
+  $expectedHeadOid: GitObjectID!,
+  $mergeMethod: PullRequestMergeMethod!,
+  $commitHeadline: String!
+){ 
   mergePullRequest(input: {
     pullRequestId: $pullRequestId,
     expectedHeadOid: $expectedHeadOid,
