@@ -132,7 +132,15 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return pushBackError{delay: worker.DurationToWaitAfterUpdateBranch}
 	}
 
-	stopLogic, didMergePullRequest, err := worker.mergePullRequest(ctx, &logger, cfg, &msg.Repository, details, accessToken)
+	stopLogic, didMergePullRequest, err := worker.mergePullRequest(
+		ctx,
+		&logger,
+		cfg,
+		&msg.Repository,
+		msg.PullRequest.Number,
+		details,
+		accessToken,
+	)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -262,6 +270,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 	rootLogger *zerolog.Logger,
 	cfg *ConfigV1,
 	repository *common.Repository,
+	number int64,
 	details *github.PullRequestDetails,
 	accessToken string,
 ) (stopLogic, didMerge bool, err error) {
@@ -312,7 +321,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 		details.ID,
 		details.LastCommitSha,
 		cfg.Merge.Strategy.GithubString(),
-		details.Title,
+		fmt.Sprintf("%s (#%d)", details.Title, number),
 	); err != nil {
 		var graphQLErrors github.GraphQLErrors
 		if errors.As(err, &graphQLErrors) {
