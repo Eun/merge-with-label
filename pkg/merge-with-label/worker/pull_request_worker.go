@@ -132,7 +132,15 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return pushBackError{delay: worker.DurationToWaitAfterUpdateBranch}
 	}
 
-	stopLogic, didMergePullRequest, err := worker.mergePullRequest(ctx, &logger, cfg, &msg.Repository, msg.PullRequest.Number, details, accessToken)
+	stopLogic, didMergePullRequest, err := worker.mergePullRequest(
+		ctx,
+		&logger,
+		cfg,
+		&msg.Repository,
+		msg.PullRequest.Number,
+		details,
+		accessToken,
+	)
 	if err != nil {
 		return errors.WithStack(err)
 	}
