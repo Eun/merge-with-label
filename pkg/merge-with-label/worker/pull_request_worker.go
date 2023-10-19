@@ -312,6 +312,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 		details.ID,
 		details.LastCommitSha,
 		cfg.Merge.Strategy.GithubString(),
+		details.Title,
 	); err != nil {
 		var graphQLErrors github.GraphQLErrors
 		if errors.As(err, &graphQLErrors) {
