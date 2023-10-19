@@ -292,14 +292,16 @@ func MergePullRequest(
 	token,
 	pullRequestID,
 	expectedHeadOid,
-	mergeStrategy string,
+	mergeStrategy,
+	commitHeadline string,
 ) error {
 	_, err := doGraphQLRequest(ctx, client, token, `
-mutation MergePulLRequest($pullRequestId: ID!, $expectedHeadOid: GitObjectID!, $mergeMethod: PullRequestMergeMethod!){ 
+mutation MergePulLRequest($pullRequestId: ID!, $expectedHeadOid: GitObjectID!, $mergeMethod: PullRequestMergeMethod!, $commitHeadline: String!){ 
   mergePullRequest(input: {
     pullRequestId: $pullRequestId,
     expectedHeadOid: $expectedHeadOid,
     mergeMethod: $mergeMethod,
+    commitHeadline: $commitHeadline,
   }) {
     clientMutationId
   }
@@ -308,6 +310,7 @@ mutation MergePulLRequest($pullRequestId: ID!, $expectedHeadOid: GitObjectID!, $
 		"pullRequestId":   pullRequestID,
 		"expectedHeadOid": expectedHeadOid,
 		"mergeMethod":     mergeStrategy,
+		"commitHeadline":  commitHeadline,
 	})
 	if err != nil {
 		return errors.Wrap(err, "unable to merge pull request")
