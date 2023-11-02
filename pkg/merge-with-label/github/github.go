@@ -226,27 +226,12 @@ func GetAccessToken(
 		return nil, errors.Wrap(err, "unable to create request")
 	}
 
-	const maxIssueTime = time.Minute * 2
-	iss := time.Now().Add(-30 * time.Second).Truncate(time.Second)
-	exp := iss.Add(maxIssueTime)
-	claims := &jwt.RegisteredClaims{
-		IssuedAt:  jwt.NewNumericDate(iss),
-		ExpiresAt: jwt.NewNumericDate(exp),
-		Issuer:    strconv.FormatInt(appID, 10),
-	}
-	bearer := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-
-	key, err := jwt.ParseRSAPrivateKeyFromPEM(privateKey)
+	authorizationKey, err := getAuthorizationKey(appID, privateKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not parse private key")
+		return nil, errors.Wrap(err, "unable to get authorization key")
 	}
 
-	ss, err := bearer.SignedString(key)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not sign jwt")
-	}
-
-	r.Header.Set("Authorization", "Bearer "+ss)
+	r.Header.Set("Authorization", authorizationKey)
 	r.Header.Add("Accept", "application/vnd.github+json")
 	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
 
@@ -258,7 +243,7 @@ func GetAccessToken(
 
 	body.Reset()
 
-	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	_, err = io.Copy(&body, io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to copy body")
 	}
@@ -273,7 +258,7 @@ func GetAccessToken(
 	}
 
 	var token AccessToken
-	if err := json.Unmarshal(buf, &token); err != nil {
+	if err := json.NewDecoder(&body).Decode(&token); err != nil {
 		return nil, errors.WithStack(&ResponseError{
 			Message:            "unable to decode body",
 			ActualStatusCode:   resp.StatusCode,
@@ -864,4 +849,89 @@ mutation UpdateCheckRun(
 	}
 
 	return response.ClientMutationID, nil
+}
+
+func GetInstallationIDs(
+	ctx context.Context,
+	client *http.Client,
+	appID int64,
+	privateKey []byte,
+) ([]int64, error) {
+	r, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"https://api.github.com/app/installations",
+		http.NoBody,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create request")
+	}
+
+	authorizationKey, err := getAuthorizationKey(appID, privateKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to get authorization key")
+	}
+
+	r.Header.Set("Authorization", authorizationKey)
+	r.Header.Add("Accept", "application/vnd.github+json")
+	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := client.Do(r)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to execute request")
+	}
+	defer resp.Body.Close()
+
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to copy body")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.WithStack(&ResponseError{
+			Message:            "error when installations",
+			ActualStatusCode:   resp.StatusCode,
+			ExpectedStatusCode: http.StatusOK,
+			Body:               string(buf),
+		})
+	}
+	var response []struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(buf, &response); err != nil {
+		return nil, errors.WithStack(&ResponseError{
+			Message:   "unable to decode body",
+			Body:      string(buf),
+			NextError: err,
+		})
+	}
+
+	ids := make([]int64, len(response))
+	for i := range response {
+		ids[i] = response[i].ID
+	}
+	return ids, nil
+}
+
+func getAuthorizationKey(appID int64, privateKey []byte) (string, error) {
+	const maxIssueTime = time.Minute * 2
+	iss := time.Now().Add(-30 * time.Second).Truncate(time.Second)
+	exp := iss.Add(maxIssueTime)
+	claims := &jwt.RegisteredClaims{
+		IssuedAt:  jwt.NewNumericDate(iss),
+		ExpiresAt: jwt.NewNumericDate(exp),
+		Issuer:    strconv.FormatInt(appID, 10),
+	}
+	bearer := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+
+	key, err := jwt.ParseRSAPrivateKeyFromPEM(privateKey)
+	if err != nil {
+		return "", errors.Wrap(err, "could not parse private key")
+	}
+
+	ss, err := bearer.SignedString(key)
+	if err != nil {
+		return "", errors.Wrap(err, "could not sign jwt")
+	}
+	return "Bearer " + ss, nil
 }
