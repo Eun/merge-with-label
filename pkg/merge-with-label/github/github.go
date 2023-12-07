@@ -117,6 +117,7 @@ func doGraphQLRequest(ctx context.Context, client *http.Client, token, query str
 	}
 
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github.merge-info-preview+json")
 
 	resp, err := client.Do(req)
 	if err != nil {
