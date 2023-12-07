@@ -424,21 +424,22 @@ query GetPullRequests($query: String!, $after: String){
 }
 
 type PullRequestDetails struct {
-	AheadBy        int
-	ApprovedBy     []string
-	Author         string
-	BaseRefName    string
-	CheckStates    map[string]string
-	HasConflicts   bool
-	HeadRefID      string
-	HeadRefName    string
-	ID             string
-	IsMergeable    bool
-	Labels         []string
-	LastCommitSha  string
-	LastCommitTime time.Time
-	State          string
-	Title          string
+	AheadBy          int
+	ApprovedBy       []string
+	Author           string
+	BaseRefName      string
+	CheckStates      map[string]string
+	HasConflicts     bool
+	HeadRefID        string
+	HeadRefName      string
+	ID               string
+	IsMergeable      bool
+	MergeStateStatus string
+	Labels           []string
+	LastCommitSha    string
+	LastCommitTime   time.Time
+	State            string
+	Title            string
 }
 
 func getPullRequestBaseName(ctx context.Context, client *http.Client, token string, repo *common.Repository, number int64) (string, error) {
@@ -540,10 +541,11 @@ func GetPullRequestDetails(
 							Name string `json:"name"`
 						} `json:"nodes"`
 					} `json:"labels" graphql:"labels(last: 100)"`
-					Mergeable string `json:"mergeable"`
-					State     string `json:"state"`
-					Title     string `json:"title"`
-					Reviews   struct {
+					MergeStateStatus string `json:"mergeStateStatus"`
+					Mergeable        string `json:"mergeable"`
+					State            string `json:"state"`
+					Title            string `json:"title"`
+					Reviews          struct {
 						Nodes []struct {
 							Author struct {
 								Login string `json:"login"`
@@ -592,18 +594,19 @@ func GetPullRequestDetails(
 	}
 
 	details := &PullRequestDetails{
-		AheadBy:      response.Data.Repository.PullRequest.HeadRef.Compare.AheadBy,
-		ApprovedBy:   make([]string, len(response.Data.Repository.PullRequest.Reviews.Nodes)),
-		Author:       response.Data.Repository.PullRequest.Author.Login,
-		BaseRefName:  baseName,
-		HasConflicts: response.Data.Repository.PullRequest.Mergeable == "CONFLICTING",
-		HeadRefID:    response.Data.Repository.PullRequest.HeadRef.ID,
-		HeadRefName:  response.Data.Repository.PullRequest.HeadRef.Name,
-		ID:           response.Data.Repository.PullRequest.ID,
-		IsMergeable:  response.Data.Repository.PullRequest.Mergeable == "MERGEABLE",
-		Labels:       make([]string, len(response.Data.Repository.PullRequest.Labels.Nodes)),
-		State:        response.Data.Repository.PullRequest.State,
-		Title:        response.Data.Repository.PullRequest.Title,
+		AheadBy:          response.Data.Repository.PullRequest.HeadRef.Compare.AheadBy,
+		ApprovedBy:       make([]string, len(response.Data.Repository.PullRequest.Reviews.Nodes)),
+		Author:           response.Data.Repository.PullRequest.Author.Login,
+		BaseRefName:      baseName,
+		HasConflicts:     response.Data.Repository.PullRequest.Mergeable == "CONFLICTING",
+		HeadRefID:        response.Data.Repository.PullRequest.HeadRef.ID,
+		HeadRefName:      response.Data.Repository.PullRequest.HeadRef.Name,
+		ID:               response.Data.Repository.PullRequest.ID,
+		IsMergeable:      response.Data.Repository.PullRequest.Mergeable == "MERGEABLE",
+		MergeStateStatus: response.Data.Repository.PullRequest.MergeStateStatus,
+		Labels:           make([]string, len(response.Data.Repository.PullRequest.Labels.Nodes)),
+		State:            response.Data.Repository.PullRequest.State,
+		Title:            response.Data.Repository.PullRequest.Title,
 	}
 
 	for i := range response.Data.Repository.PullRequest.Reviews.Nodes {
