@@ -22,10 +22,14 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	logger := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel).With().Timestamp().Logger()
 	if os.Getenv("DEBUG") != "" {
 		logger = logger.Level(zerolog.DebugLevel)
 		logger.Debug().Msg("debug logging enabled")
+	}
+	if os.Getenv("TRACE") != "" {
+		logger = logger.Level(zerolog.TraceLevel)
+		logger.Debug().Msg("trace logging enabled")
 	}
 
 	if os.Getenv("APP_ID") == "" {
