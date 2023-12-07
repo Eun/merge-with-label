@@ -125,11 +125,12 @@ func (worker *pushWorker) runLogic(rootLogger *zerolog.Logger, msg *common.Queue
 				Repository:     msg.Repository,
 			})
 		if err != nil {
-			logger.Error().Err(err).Msg("unable to publish pull_request to queue")
+			logger.Error().Int64("number", pullRequests[i].Number).Err(err).
+				Msg("unable to publish pull_request to queue")
 			result = multierror.Append(result, errors.Wrap(err, "unable to publish pull_request to queue"))
 			continue
 		}
-		logger.Debug().
+		logger.Debug().Int64("number", pullRequests[i].Number).
 			Msg("published pull_request message")
 	}
 	return result
