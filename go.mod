@@ -1,6 +1,6 @@
 module github.com/Eun/merge-with-label
 
-go 1.21.3
+go 1.21
 
 require (
 	github.com/Eun/go-gen-graphql v0.0.3
