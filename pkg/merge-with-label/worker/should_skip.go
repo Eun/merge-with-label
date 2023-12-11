@@ -331,14 +331,15 @@ func (worker *Worker) shouldSkipBecauseIsNotMergeable(*MergeConfigV1) shouldSkip
 
 		if diff := time.Until(details.LastCommitTime.Add(worker.DurationBeforeMergeAfterCheck)); diff > 0 {
 			// it's a bit too early. block merging, push back onto the queue
-			logger.Debug().Msg("pull request not mergeable, but the the last commit is too recent, retrying")
+			logger.Debug().Str("merge_state_status", details.MergeStateStatus).
+				Msg("pull request is not mergeable, but the the last commit is too recent, retrying")
 			return shouldSkipResult{SkipAction: false}, pushBackError{delay: diff}
 		}
-		logger.Debug().Msg("pull request not mergeable")
+		logger.Debug().Str("merge_state_status", details.MergeStateStatus).Msg("pull request not mergeable")
 		return shouldSkipResult{
 			SkipAction: true,
 			Title:      "not merging",
-			Summary:    "pull request is not mergeable",
+			Summary:    fmt.Sprintf("pull request is not mergeable, state is %s", details.MergeStateStatus),
 		}, nil
 	}
 }
