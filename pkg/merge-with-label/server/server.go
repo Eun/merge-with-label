@@ -63,7 +63,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger := h.GetLoggerForContext(r.Context()).With().Str("event", githubEvent).Logger()
-	logger.Debug().Str("body", string(body)).Msg("got event")
+	logger.Trace().Str("body", string(body)).Msg("got event")
 	switch githubEvent {
 	case "check_run":
 		h.handleCheckRun(&logger, githubID, body, w)
