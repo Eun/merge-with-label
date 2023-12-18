@@ -142,6 +142,7 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		accessToken,
 	)
 	if err != nil {
+		logger.Error().Err(err).Msg("merge pull request failed")
 		return errors.WithStack(err)
 	}
 	if stopLogic {
