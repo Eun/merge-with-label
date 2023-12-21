@@ -25,3 +25,8 @@ type QueuePushMessage struct {
 	InstallationID int64      `json:"installation_id"`
 	Repository     Repository `json:"repository"`
 }
+
+type QueueStatusMessage struct {
+	InstallationID int64      `json:"installation_id"`
+	Repository     Repository `json:"repository"`
+}

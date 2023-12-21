@@ -29,8 +29,9 @@ type Handler struct {
 	AllowOnlyPublicRepositories bool
 
 	JetStreamContext   nats.JetStreamContext
-	PullRequestSubject string
 	PushSubject        string
+	StatusSubject      string
+	PullRequestSubject string
 
 	RateLimitKV       nats.KeyValue
 	RateLimitInterval time.Duration
@@ -63,7 +64,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	logger := h.GetLoggerForContext(r.Context()).With().Str("event", githubEvent).Logger()
-	logger.Trace().Str("body", string(body)).Msg("got event")
+	if logger.GetLevel() == zerolog.TraceLevel {
+		logger.Trace().Str("body", string(body)).Msg("got event")
+	} else {
+		logger.Debug().Msg("got event")
+	}
 	switch githubEvent {
 	case "check_run":
 		h.handleCheckRun(&logger, githubID, body, w)
@@ -77,6 +82,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "push":
 		h.handlePush(&logger, githubID, body, w)
 		return
+	case "status":
+		h.handleStatus(&logger, githubID, body, w)
+		return
 	}
 	h.respond(w, http.StatusOK, "ok")
 }
@@ -88,6 +96,11 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 			PullRequests []struct {
 				Number int64 `json:"number"`
 			} `json:"pull_requests"`
+			CheckSuite struct {
+				PullRequests []struct {
+					Number int64 `json:"number"`
+				} `json:"pull_requests"`
+			} `json:"check_suite"`
 		} `json:"check_run"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -119,8 +132,13 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		return
 	}
 
-	for i := range req.CheckRun.PullRequests {
-		if req.CheckRun.PullRequests[i].Number == 0 {
+	pullRequests := req.CheckRun.PullRequests
+	for i := range req.CheckRun.CheckSuite.PullRequests {
+		pullRequests = append(pullRequests, req.CheckRun.CheckSuite.PullRequests[i])
+	}
+
+	for i := range pullRequests {
+		if pullRequests[i].Number == 0 {
 			logger.Debug().Msgf("no pull_requests.%d.number present in request", i)
 			continue
 		}
@@ -137,7 +155,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 				Private:   req.Repository.Private,
 			},
 			&common.PullRequest{
-				Number: req.CheckRun.PullRequests[i].Number,
+				Number: pullRequests[i].Number,
 			})
 		if err != nil {
 			logger.Error().Err(err).Msg("unable to queue message")
@@ -349,6 +367,58 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 		})
 	if err != nil {
 		logger.Error().Err(err).Msg("unable to queue push message")
+		h.respond(w, http.StatusInternalServerError, "error")
+		return
+	}
+	h.respond(w, http.StatusOK, "ok")
+}
+
+func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+	var req struct {
+		BaseRequest
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		logger.Error().Err(err).Msg("unable to decode request")
+		h.respond(w, http.StatusBadRequest, "bad request")
+		return
+	}
+
+	if !req.BaseRequest.IsValid(logger) {
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
+	if h.AllowOnlyPublicRepositories && req.Repository.Private {
+		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
+	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
+		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
+	err := common.QueueMessage(
+		logger,
+		h.JetStreamContext,
+		h.RateLimitKV,
+		h.RateLimitInterval,
+		h.StatusSubject+"."+eventID,
+		fmt.Sprintf("status.%d.%s", req.Installation.ID, req.Repository.NodeID),
+		&common.QueueStatusMessage{
+			InstallationID: req.Installation.ID,
+			Repository: common.Repository{
+				NodeID:    req.Repository.NodeID,
+				FullName:  req.Repository.FullName,
+				Name:      req.Repository.Name,
+				OwnerName: req.Repository.Owner.Login,
+				Private:   req.Repository.Private,
+			},
+		})
+	if err != nil {
+		logger.Error().Err(err).Msg("unable to queue status message")
 		h.respond(w, http.StatusInternalServerError, "error")
 		return
 	}

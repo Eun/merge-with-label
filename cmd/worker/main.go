@@ -154,6 +154,26 @@ func main() {
 		}
 	}()
 
+	logger.Debug().Msg("subscribing to status subject")
+	statusSubscription, err := js.QueueSubscribeSync(
+		cmd.GetSetting[string](cmd.StatusSubjectSetting)+".>",
+		"status-worker",
+		nats.AckExplicit(),
+		nats.MaxDeliver(cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting)),
+	)
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Str("nats_url", os.Getenv("NATS_URL")).
+			Msg("unable to create jetstream subscriber for status queue")
+		return
+	}
+	defer func() {
+		if err := statusSubscription.Unsubscribe(); err != nil {
+			logger.Error().Err(err).Msg("unable to unsubscribe from status queue")
+		}
+	}()
+
 	logger.Debug().Msg("subscribing to pull_request subject")
 	pullRequestSubscription, err := js.QueueSubscribeSync(
 		cmd.GetSetting[string](cmd.PullRequestSubjectSetting)+".>",
@@ -182,6 +202,7 @@ func main() {
 		AllowOnlyPublicRepositories: cmd.GetSetting[bool](cmd.AllowOnlyPublicRepositories),
 
 		PushSubscription:        pushSubscription,
+		StatusSubscription:      statusSubscription,
 		PullRequestSubscription: pullRequestSubscription,
 
 		AccessTokensKV: accessTokensKV,

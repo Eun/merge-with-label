@@ -20,6 +20,7 @@ type Worker struct {
 	AllowOnlyPublicRepositories bool
 
 	PushSubscription        *nats.Subscription
+	StatusSubscription      *nats.Subscription
 	PullRequestSubscription *nats.Subscription
 
 	AccessTokensKV nats.KeyValue
@@ -60,18 +61,6 @@ func (worker *Worker) Consume() error {
 	worker.closeCh = make(chan struct{})
 	errChan := make(chan error)
 
-	pullRequestChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.PullRequestSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
-			}
-			pullRequestChan <- msg
-		}
-	}()
-
 	pushChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
 	go func() {
 		for {
@@ -84,7 +73,35 @@ func (worker *Worker) Consume() error {
 		}
 	}()
 
+	statusChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
+	go func() {
+		for {
+			msg, err := worker.StatusSubscription.NextMsgWithContext(context.Background())
+			if err != nil {
+				errChan <- err
+				return
+			}
+			statusChan <- msg
+		}
+	}()
+
+	pullRequestChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
+	go func() {
+		for {
+			msg, err := worker.PullRequestSubscription.NextMsgWithContext(context.Background())
+			if err != nil {
+				errChan <- err
+				return
+			}
+			pullRequestChan <- msg
+		}
+	}()
+
 	pushMsgWorker := pushWorker{
+		Worker: worker,
+	}
+
+	statusMsgWorker := statusWorker{
 		Worker: worker,
 	}
 
@@ -98,6 +115,10 @@ func (worker *Worker) Consume() error {
 			worker.Logger.Debug().
 				Msg("push message received")
 			pushMsgWorker.handleMessage(worker.Logger, msg)
+		case msg := <-statusChan:
+			worker.Logger.Debug().
+				Msg("status message received")
+			statusMsgWorker.handleMessage(worker.Logger, msg)
 		case msg := <-pullRequestChan:
 			worker.Logger.Debug().
 				Str("id", msg.Header.Get(nats.MsgIdHdr)).

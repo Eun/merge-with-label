@@ -18,8 +18,9 @@ const (
 	AllowOnlyPublicRepositories            Setting = "AllowOnlyPublicRepositories"
 	BotNameSetting                         Setting = "BotName"
 	StreamNameSetting                      Setting = "StreamName"
-	PullRequestSubjectSetting              Setting = "PullRequestSubject"
 	PushSubjectSetting                     Setting = "PushSubject"
+	StatusSubjectSetting                   Setting = "StatusSubject"
+	PullRequestSubjectSetting              Setting = "PullRequestSubject"
 	MessageRetryAttemptsSetting            Setting = "MessageRetryAttempts"
 	MessageRetryWaitSetting                Setting = "MessageRetryWait"
 	RateLimitBucketNameSetting             Setting = "RateLimitBucketName"
@@ -42,8 +43,9 @@ var defaultSettings = map[Setting]any{
 	AllowOnlyPublicRepositories:            false,
 	BotNameSetting:                         "merge-with-label",
 	StreamNameSetting:                      "mwl_bot_events",
-	PullRequestSubjectSetting:              "pull_request",
 	PushSubjectSetting:                     "push",
+	StatusSubjectSetting:                   "status",
+	PullRequestSubjectSetting:              "pull_request",
 	MessageRetryAttemptsSetting:            5,                //nolint: gomnd // allow to set defaults
 	MessageRetryWaitSetting:                time.Second * 15, //nolint: gomnd // allow to set defaults
 	RateLimitBucketNameSetting:             "mwl_rate_limit",
