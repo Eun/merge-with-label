@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -114,16 +115,16 @@ func (worker *Worker) Consume() error {
 		case msg := <-pushChan:
 			worker.Logger.Debug().
 				Msg("push message received")
-			pushMsgWorker.handleMessage(worker.Logger, msg)
+			handleMessage[common.QueuePushMessage](worker, worker.Logger, msg, pushMsgWorker.runLogic)
 		case msg := <-statusChan:
 			worker.Logger.Debug().
 				Msg("status message received")
-			statusMsgWorker.handleMessage(worker.Logger, msg)
+			handleMessage[common.QueueStatusMessage](worker, worker.Logger, msg, statusMsgWorker.runLogic)
 		case msg := <-pullRequestChan:
 			worker.Logger.Debug().
 				Str("id", msg.Header.Get(nats.MsgIdHdr)).
 				Msg("pull_request message received")
-			pullRequestMsgWorker.handleMessage(worker.Logger, msg)
+			handleMessage[common.QueuePullRequestMessage](worker, worker.Logger, msg, pullRequestMsgWorker.runLogic)
 		case err := <-errChan:
 			return errors.Wrap(err, "error received")
 		case <-worker.closeCh:
@@ -136,4 +137,47 @@ func (worker *Worker) Consume() error {
 func (worker *Worker) Shutdown(context.Context) error {
 	worker.closeCh <- struct{}{}
 	return nil
+}
+
+func handleMessage[T common.Message](worker *Worker, logger *zerolog.Logger, msg *nats.Msg, fn func(logger *zerolog.Logger, m *T) error) {
+	if common.DelayMessageIfNeeded(logger, msg) {
+		return
+	}
+
+	var m T
+	if err := json.Unmarshal(msg.Data, m); err != nil {
+		logger.Error().Err(err).Msg("unable to decode queue message")
+		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
+			logger.Error().Err(err).Msg("unable to nak message")
+		}
+		return
+	}
+
+	if worker.AllowOnlyPublicRepositories && m.GetRepository().Private {
+		logger.Warn().Str("repo", m.GetRepository().FullName).Msg("repository is not allowed (it is private)")
+		if err := msg.Ack(); err != nil {
+			logger.Error().Err(err).Msg("unable to ack message")
+		}
+		return
+	}
+
+	if worker.AllowedRepositories.ContainsOneOf(m.GetRepository().FullName) == "" {
+		logger.Warn().Str("repo", m.GetRepository().FullName).Msg("repository is not allowed")
+		if err := msg.Ack(); err != nil {
+			logger.Error().Err(err).Msg("unable to ack message")
+		}
+		return
+	}
+
+	err := fn(logger, &m)
+	if err != nil {
+		logger.Error().Err(err).Msg("error")
+		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
+			logger.Error().Err(err).Msg("unable to nak message")
+		}
+		return
+	}
+	if err := msg.Ack(); err != nil {
+		logger.Error().Err(err).Msg("unable to ack message")
+	}
 }

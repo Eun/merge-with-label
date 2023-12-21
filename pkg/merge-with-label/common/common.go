@@ -15,18 +15,32 @@ type PullRequest struct {
 	Number int64 `json:"number"`
 }
 
+type Message interface {
+	GetInstallationID() int64
+	GetRepository() Repository
+}
+
+type BaseMessage struct {
+	InstallationID int64      `json:"installation_id"`
+	Repository     Repository `json:"repository"`
+}
+
+func (m BaseMessage) GetRepository() Repository {
+	return m.Repository
+}
+func (m BaseMessage) GetInstallationID() int64 {
+	return m.InstallationID
+}
+
 type QueuePullRequestMessage struct {
-	InstallationID int64       `json:"installation_id"`
-	Repository     Repository  `json:"repository"`
-	PullRequest    PullRequest `json:"pull_request"`
+	BaseMessage
+	PullRequest PullRequest `json:"pull_request"`
 }
 
 type QueuePushMessage struct {
-	InstallationID int64      `json:"installation_id"`
-	Repository     Repository `json:"repository"`
+	BaseMessage
 }
 
 type QueueStatusMessage struct {
-	InstallationID int64      `json:"installation_id"`
-	Repository     Repository `json:"repository"`
+	BaseMessage
 }

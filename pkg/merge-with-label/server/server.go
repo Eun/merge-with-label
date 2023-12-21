@@ -356,13 +356,15 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 		h.PushSubject+"."+eventID,
 		fmt.Sprintf("push.%d.%s", req.Installation.ID, req.Repository.NodeID),
 		&common.QueuePushMessage{
-			InstallationID: req.Installation.ID,
-			Repository: common.Repository{
-				NodeID:    req.Repository.NodeID,
-				FullName:  req.Repository.FullName,
-				Name:      req.Repository.Name,
-				OwnerName: req.Repository.Owner.Login,
-				Private:   req.Repository.Private,
+			BaseMessage: common.BaseMessage{
+				InstallationID: req.Installation.ID,
+				Repository: common.Repository{
+					NodeID:    req.Repository.NodeID,
+					FullName:  req.Repository.FullName,
+					Name:      req.Repository.Name,
+					OwnerName: req.Repository.Owner.Login,
+					Private:   req.Repository.Private,
+				},
 			},
 		})
 	if err != nil {
@@ -408,13 +410,15 @@ func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, body []by
 		h.StatusSubject+"."+eventID,
 		fmt.Sprintf("status.%d.%s", req.Installation.ID, req.Repository.NodeID),
 		&common.QueueStatusMessage{
-			InstallationID: req.Installation.ID,
-			Repository: common.Repository{
-				NodeID:    req.Repository.NodeID,
-				FullName:  req.Repository.FullName,
-				Name:      req.Repository.Name,
-				OwnerName: req.Repository.Owner.Login,
-				Private:   req.Repository.Private,
+			BaseMessage: common.BaseMessage{
+				InstallationID: req.Installation.ID,
+				Repository: common.Repository{
+					NodeID:    req.Repository.NodeID,
+					FullName:  req.Repository.FullName,
+					Name:      req.Repository.Name,
+					OwnerName: req.Repository.Owner.Login,
+					Private:   req.Repository.Private,
+				},
 			},
 		})
 	if err != nil {
@@ -440,9 +444,11 @@ func (h *Handler) queuePullRequestMessage(
 		h.PullRequestSubject+"."+eventID,
 		fmt.Sprintf("pull_request.%d.%s.%d", installationID, repository.NodeID, pullRequest.Number),
 		&common.QueuePullRequestMessage{
-			InstallationID: installationID,
-			Repository:     *repository,
-			PullRequest:    *pullRequest,
+			BaseMessage: common.BaseMessage{
+				InstallationID: installationID,
+				Repository:     *repository,
+			},
+			PullRequest: *pullRequest,
 		})
 }
 

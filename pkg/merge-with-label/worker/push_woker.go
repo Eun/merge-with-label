@@ -2,12 +2,10 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
@@ -17,49 +15,6 @@ import (
 
 type pushWorker struct {
 	*Worker
-}
-
-func (worker *pushWorker) handleMessage(logger *zerolog.Logger, msg *nats.Msg) {
-	if common.DelayMessageIfNeeded(logger, msg) {
-		return
-	}
-
-	var m common.QueuePushMessage
-	if err := json.Unmarshal(msg.Data, &m); err != nil {
-		logger.Error().Err(err).Msg("unable to decode queue message")
-		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-
-	if worker.AllowOnlyPublicRepositories && m.Repository.Private {
-		logger.Warn().Str("repo", m.Repository.FullName).Msg("repository is not allowed (it is private)")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
-	}
-
-	if worker.AllowedRepositories.ContainsOneOf(m.Repository.FullName) == "" {
-		logger.Warn().Str("repo", m.Repository.FullName).Msg("repository is not allowed")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
-	}
-
-	err := worker.runLogic(logger, &m)
-	if err != nil {
-		logger.Error().Err(err).Msg("error")
-		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-	if err := msg.Ack(); err != nil {
-		logger.Error().Err(err).Msg("unable to ack message")
-	}
 }
 
 func (worker *pushWorker) runLogic(rootLogger *zerolog.Logger, msg *common.QueuePushMessage) error {
@@ -120,9 +75,11 @@ func (worker *pushWorker) runLogic(rootLogger *zerolog.Logger, msg *common.Queue
 			worker.PullRequestSubject+"."+uuid.NewString(),
 			fmt.Sprintf("pull_request.%d.%s.%d", msg.InstallationID, msg.Repository.NodeID, pullRequests[i].Number),
 			&common.QueuePullRequestMessage{
-				InstallationID: msg.InstallationID,
-				PullRequest:    pullRequests[i],
-				Repository:     msg.Repository,
+				BaseMessage: common.BaseMessage{
+					InstallationID: msg.InstallationID,
+					Repository:     msg.Repository,
+				},
+				PullRequest: pullRequests[i],
 			})
 		if err != nil {
 			logger.Error().Int64("number", pullRequests[i].Number).Err(err).

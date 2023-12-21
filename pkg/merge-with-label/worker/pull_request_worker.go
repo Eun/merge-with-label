@@ -2,10 +2,8 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
@@ -15,55 +13,6 @@ import (
 
 type pullRequestWorker struct {
 	*Worker
-}
-
-func (worker *pullRequestWorker) handleMessage(logger *zerolog.Logger, msg *nats.Msg) {
-	if common.DelayMessageIfNeeded(logger, msg) {
-		return
-	}
-
-	var m common.QueuePullRequestMessage
-	if err := json.Unmarshal(msg.Data, &m); err != nil {
-		logger.Error().Err(err).Msg("unable to decode queue message")
-		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-
-	if worker.AllowOnlyPublicRepositories && m.Repository.Private {
-		logger.Warn().Str("repo", m.Repository.FullName).Msg("repository is not allowed (it is private)")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
-	}
-
-	if worker.AllowedRepositories.ContainsOneOf(m.Repository.FullName) == "" {
-		logger.Warn().Str("repo", m.Repository.FullName).Msg("repository is not allowed")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
-	}
-
-	err := worker.runLogic(logger, &m)
-	if err != nil {
-		var pbErr pushBackError
-		delay := worker.RetryWait
-		if errors.As(err, &pbErr) {
-			delay = pbErr.delay
-		} else {
-			logger.Error().Err(err).Msg("error")
-		}
-		if err := msg.NakWithDelay(delay); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-	if err := msg.Ack(); err != nil {
-		logger.Error().Err(err).Msg("unable to ack message")
-	}
 }
 
 func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *common.QueuePullRequestMessage) error {
