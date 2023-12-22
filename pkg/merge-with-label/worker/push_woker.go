@@ -1,3 +1,4 @@
+//nolint:dupl // very similar to status_worker but keep it separated for readability
 package worker
 
 import (

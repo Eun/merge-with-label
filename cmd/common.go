@@ -46,21 +46,21 @@ var defaultSettings = map[Setting]any{
 	PushSubjectSetting:                     "push",
 	StatusSubjectSetting:                   "status",
 	PullRequestSubjectSetting:              "pull_request",
-	MessageRetryAttemptsSetting:            5,                //nolint: gomnd // allow to set defaults
-	MessageRetryWaitSetting:                time.Second * 15, //nolint: gomnd // allow to set defaults
+	MessageRetryAttemptsSetting:            5,                //nolint:gomnd // allow to set defaults
+	MessageRetryWaitSetting:                time.Second * 15, //nolint:gomnd // allow to set defaults
 	RateLimitBucketNameSetting:             "mwl_rate_limit",
-	RateLimitBucketTTLSetting:              time.Hour * 24,   //nolint: gomnd // allow to set defaults
-	RateLimitIntervalSetting:               time.Second * 30, //nolint: gomnd // allow to set defaults
+	RateLimitBucketTTLSetting:              time.Hour * 24,   //nolint:gomnd // allow to set defaults
+	RateLimitIntervalSetting:               time.Second * 30, //nolint:gomnd // allow to set defaults
 	AccessTokensBucketNameSetting:          "mwl_access_tokens",
-	AccessTokensBucketTTLSetting:           time.Hour * 24, //nolint: gomnd // allow to set defaults
+	AccessTokensBucketTTLSetting:           time.Hour * 24, //nolint:gomnd // allow to set defaults
 	ConfigsBucketNameSetting:               "mwl_configs",
-	ConfigsBucketTTLSetting:                time.Hour * 24, //nolint: gomnd // allow to set defaults
+	ConfigsBucketTTLSetting:                time.Hour * 24, //nolint:gomnd // allow to set defaults
 	CheckRunsBucketNameSetting:             "mwl_check_runs",
-	CheckRunsBucketTTLSetting:              time.Minute * 10, //nolint: gomnd // allow to set defaults
-	DurationBeforeMergeAfterCheckSetting:   time.Second * 10, //nolint: gomnd // allow to set defaults
-	DurationToWaitAfterUpdateBranchSetting: time.Second * 30, //nolint: gomnd // allow to set defaults
-	MaxMessageAgeSetting:                   time.Minute * 10, //nolint: gomnd // allow to set defaults
-	MessageChannelSizePerSubjectSetting:    64,               //nolint: gomnd // allow to set defaults
+	CheckRunsBucketTTLSetting:              time.Minute * 10, //nolint:gomnd // allow to set defaults
+	DurationBeforeMergeAfterCheckSetting:   time.Second * 10, //nolint:gomnd // allow to set defaults
+	DurationToWaitAfterUpdateBranchSetting: time.Second * 30, //nolint:gomnd // allow to set defaults
+	MaxMessageAgeSetting:                   time.Minute * 10, //nolint:gomnd // allow to set defaults
+	MessageChannelSizePerSubjectSetting:    64,               //nolint:gomnd // allow to set defaults
 }
 
 func GetSetting[T any](name Setting) (t T) {

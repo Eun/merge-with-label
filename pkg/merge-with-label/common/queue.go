@@ -1,7 +1,7 @@
 package common
 
 import (
-	"crypto/md5" //nolint: gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
+	"crypto/md5" //nolint:gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -22,7 +22,7 @@ func QueueMessage(
 	msg any,
 ) error {
 	const bufSize = 8 // 64 bit
-	//nolint: gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
+	//nolint:gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
 	h := md5.Sum([]byte(msgID))
 	msgIDHash := hex.EncodeToString(h[:])
 	entry, err := kv.Get(msgIDHash)

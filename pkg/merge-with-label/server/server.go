@@ -69,6 +69,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		logger.Debug().Msg("got event")
 	}
+
+	baseRequest := h.unmarshalAndValidateRequest(&logger, body, w)
+	if baseRequest == nil {
+		return
+	}
+
 	switch githubEvent {
 	case "check_run":
 		h.handleCheckRun(&logger, githubID, body, w)
@@ -80,13 +86,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePullRequestReview(&logger, githubID, body, w)
 		return
 	case "push":
-		h.handlePush(&logger, githubID, body, w)
+		h.handlePush(&logger, githubID, baseRequest, w)
 		return
 	case "status":
-		h.handleStatus(&logger, githubID, body, w)
+		h.handleStatus(&logger, githubID, baseRequest, w)
 		return
 	}
 	h.respond(w, http.StatusOK, "ok")
+}
+
+func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body []byte, w http.ResponseWriter) *BaseRequest {
+	var req BaseRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		rootLogger.Error().Err(err).Msg("unable to decode request")
+		h.respond(w, http.StatusBadRequest, "bad request")
+		return nil
+	}
+
+	if !req.IsValid(rootLogger) {
+		h.respond(w, http.StatusOK, "ok")
+		return nil
+	}
+
+	if req.Action != "completed" {
+		rootLogger.Debug().Msg("action is not completed")
+		h.respond(w, http.StatusOK, "ok")
+		return nil
+	}
+
+	if h.AllowOnlyPublicRepositories && req.Repository.Private {
+		rootLogger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
+		h.respond(w, http.StatusOK, "ok")
+		return nil
+	}
+
+	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
+		rootLogger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
+		h.respond(w, http.StatusOK, "ok")
+		return nil
+	}
+	return &req
 }
 
 func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
@@ -109,30 +148,9 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		return
 	}
 
-	if !req.BaseRequest.IsValid(logger) {
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
+	pullRequests := req.CheckRun.PullRequests
+	pullRequests = append(pullRequests, req.CheckRun.CheckSuite.PullRequests...)
 
-	if req.Action != "completed" {
-		logger.Debug().Msg("action is not completed")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowOnlyPublicRepositories && req.Repository.Private {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	pullRequests := append(req.CheckRun.PullRequests, req.CheckRun.CheckSuite.PullRequests...)
 	for i := range pullRequests {
 		if pullRequests[i].Number == 0 {
 			logger.Debug().Msgf("no pull_requests.%d.number present in request", i)
@@ -173,11 +191,6 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error().Err(err).Msg("unable to decode request")
 		h.respond(w, http.StatusBadRequest, "bad request")
-		return
-	}
-
-	if !req.BaseRequest.IsValid(logger) {
-		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
@@ -254,11 +267,6 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 		return
 	}
 
-	if !req.BaseRequest.IsValid(logger) {
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
 	if req.PullRequest.Number == 0 {
 		logger.Debug().Msg("no pull_request.number present in request")
 		h.respond(w, http.StatusOK, "ok")
@@ -316,50 +324,24 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
-	var req struct {
-		BaseRequest
-	}
-
-	if err := json.Unmarshal(body, &req); err != nil {
-		logger.Error().Err(err).Msg("unable to decode request")
-		h.respond(w, http.StatusBadRequest, "bad request")
-		return
-	}
-
-	if !req.BaseRequest.IsValid(logger) {
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowOnlyPublicRepositories && req.Repository.Private {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
+//nolint:dupl // very similar to handleStatus but keep it separated for readability
+func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
 	err := common.QueueMessage(
 		logger,
 		h.JetStreamContext,
 		h.RateLimitKV,
 		h.RateLimitInterval,
 		h.PushSubject+"."+eventID,
-		fmt.Sprintf("push.%d.%s", req.Installation.ID, req.Repository.NodeID),
+		fmt.Sprintf("push.%d.%s", baseRequest.Installation.ID, baseRequest.Repository.NodeID),
 		&common.QueuePushMessage{
 			BaseMessage: common.BaseMessage{
-				InstallationID: req.Installation.ID,
+				InstallationID: baseRequest.Installation.ID,
 				Repository: common.Repository{
-					NodeID:    req.Repository.NodeID,
-					FullName:  req.Repository.FullName,
-					Name:      req.Repository.Name,
-					OwnerName: req.Repository.Owner.Login,
-					Private:   req.Repository.Private,
+					NodeID:    baseRequest.Repository.NodeID,
+					FullName:  baseRequest.Repository.FullName,
+					Name:      baseRequest.Repository.Name,
+					OwnerName: baseRequest.Repository.Owner.Login,
+					Private:   baseRequest.Repository.Private,
 				},
 			},
 		})
@@ -371,49 +353,24 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
-	var req struct {
-		BaseRequest
-	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		logger.Error().Err(err).Msg("unable to decode request")
-		h.respond(w, http.StatusBadRequest, "bad request")
-		return
-	}
-
-	if !req.BaseRequest.IsValid(logger) {
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowOnlyPublicRepositories && req.Repository.Private {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
+//nolint:dupl // very similar to handlePush but keep it separated for readability
+func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
 	err := common.QueueMessage(
 		logger,
 		h.JetStreamContext,
 		h.RateLimitKV,
 		h.RateLimitInterval,
 		h.StatusSubject+"."+eventID,
-		fmt.Sprintf("status.%d.%s", req.Installation.ID, req.Repository.NodeID),
+		fmt.Sprintf("status.%d.%s", baseRequest.Installation.ID, baseRequest.Repository.NodeID),
 		&common.QueueStatusMessage{
 			BaseMessage: common.BaseMessage{
-				InstallationID: req.Installation.ID,
+				InstallationID: baseRequest.Installation.ID,
 				Repository: common.Repository{
-					NodeID:    req.Repository.NodeID,
-					FullName:  req.Repository.FullName,
-					Name:      req.Repository.Name,
-					OwnerName: req.Repository.Owner.Login,
-					Private:   req.Repository.Private,
+					NodeID:    baseRequest.Repository.NodeID,
+					FullName:  baseRequest.Repository.FullName,
+					Name:      baseRequest.Repository.Name,
+					OwnerName: baseRequest.Repository.Owner.Login,
+					Private:   baseRequest.Repository.Private,
 				},
 			},
 		})
