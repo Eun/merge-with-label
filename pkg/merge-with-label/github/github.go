@@ -20,6 +20,7 @@ import (
 )
 
 const maxBodyBytes = 1024 * 1024 * 16
+const bearerHeaderName = "Bearer"
 
 var _ zerolog.LogObjectMarshaler = &ResponseError{}
 
@@ -116,7 +117,7 @@ func doGraphQLRequest(ctx context.Context, client *http.Client, token, query str
 		return nil, errors.Wrap(err, "unable to create request")
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", bearerHeaderName+" "+token)
 	req.Header.Set("Accept", "application/vnd.github.merge-info-preview+json")
 
 	resp, err := client.Do(req)
@@ -707,7 +708,7 @@ func GetConfig(
 
 	r.Header.Add("Accept", "application/vnd.github.raw")
 	r.Header.Add("X-GitHub-Api-Version", "2022-11-28")
-	r.Header.Add("Authorization", "Bearer "+token)
+	r.Header.Set("Authorization", bearerHeaderName+" "+token)
 
 	resp, err := client.Do(r)
 	if err != nil {
@@ -937,5 +938,5 @@ func getAuthorizationKey(appID int64, privateKey []byte) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "could not sign jwt")
 	}
-	return "Bearer " + ss, nil
+	return bearerHeaderName + " " + ss, nil
 }

@@ -67,8 +67,9 @@ func main() {
 	currentStreamConfig := &nats.StreamConfig{
 		Name: cmd.GetSetting[string](cmd.StreamNameSetting),
 		Subjects: []string{
-			cmd.GetSetting[string](cmd.PullRequestSubjectSetting) + ".>",
 			cmd.GetSetting[string](cmd.PushSubjectSetting) + ".>",
+			cmd.GetSetting[string](cmd.StatusSubjectSetting) + ".>",
+			cmd.GetSetting[string](cmd.PullRequestSubjectSetting) + ".>",
 		},
 		Retention: nats.WorkQueuePolicy,
 		MaxAge:    cmd.GetSetting[time.Duration](cmd.MaxMessageAgeSetting),
@@ -124,8 +125,9 @@ func main() {
 			AllowOnlyPublicRepositories: cmd.GetSetting[bool](cmd.AllowOnlyPublicRepositories),
 
 			JetStreamContext:   js,
-			PullRequestSubject: cmd.GetSetting[string](cmd.PullRequestSubjectSetting),
 			PushSubject:        cmd.GetSetting[string](cmd.PushSubjectSetting),
+			StatusSubject:      cmd.GetSetting[string](cmd.StatusSubjectSetting),
+			PullRequestSubject: cmd.GetSetting[string](cmd.PullRequestSubjectSetting),
 
 			RateLimitKV:       rateLimitKV,
 			RateLimitInterval: cmd.GetSetting[time.Duration](cmd.RateLimitIntervalSetting),

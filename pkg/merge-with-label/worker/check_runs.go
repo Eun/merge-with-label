@@ -7,15 +7,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
 
 func (worker *Worker) CreateOrUpdateCheckRun(
 	ctx context.Context,
 	rootLogger *zerolog.Logger,
-	accessToken string,
-	repository *common.Repository,
+	sess *session,
 	pullRequestNodeID,
 	sha,
 	status,
@@ -41,8 +39,8 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 		checkRunID, err := github.CreateCheckRun(
 			ctx,
 			worker.HTTPClient,
-			accessToken,
-			repository,
+			sess.AccessToken,
+			sess.Repository,
 			sha,
 			status,
 			worker.BotName,
@@ -61,8 +59,8 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 	checkRunID, err := github.UpdateCheckRun(
 		ctx,
 		worker.HTTPClient,
-		accessToken,
-		repository,
+		sess.AccessToken,
+		sess.Repository,
 		string(entry.Value()),
 		status,
 		worker.BotName,

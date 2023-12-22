@@ -10,14 +10,14 @@ import (
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 )
 
-type pushWorker struct {
+type statusWorker struct {
 	*Worker
 }
 
-func (worker *pushWorker) runLogic(rootLogger *zerolog.Logger, msg *common.QueuePushMessage) error {
+func (worker *statusWorker) runLogic(rootLogger *zerolog.Logger, msg *common.QueueStatusMessage) error {
 	ctx, cancel := context.WithTimeout(context.Background(), worker.MaxDurationForPushWorker)
 	defer cancel()
-	logger := rootLogger.With().Str("entry", "push").Str("repo", msg.Repository.FullName).Logger()
+	logger := rootLogger.With().Str("entry", "status").Str("repo", msg.Repository.FullName).Logger()
 
 	sess, err := worker.getSession(ctx, &logger, &msg.BaseMessage)
 	if err != nil {
