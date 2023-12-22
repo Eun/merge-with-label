@@ -176,8 +176,14 @@ func handleMessage[T common.Message](worker *Worker, logger *zerolog.Logger, msg
 
 	err := fn(logger, &m)
 	if err != nil {
-		logger.Error().Err(err).Msg("error")
-		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
+		var pbErr pushBackError
+		delay := worker.RetryWait
+		if errors.As(err, &pbErr) {
+			delay = pbErr.delay
+		} else {
+			logger.Error().Err(err).Msg("error")
+		}
+		if err := msg.NakWithDelay(delay); err != nil {
 			logger.Error().Err(err).Msg("unable to nak message")
 		}
 		return
