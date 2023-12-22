@@ -3,12 +3,17 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/hashicorp/go-multierror"
 	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 )
@@ -180,4 +185,50 @@ func handleMessage[T common.Message](worker *Worker, logger *zerolog.Logger, msg
 	if err := msg.Ack(); err != nil {
 		logger.Error().Err(err).Msg("unable to ack message")
 	}
+}
+
+func (worker *Worker) workOnAllPullRequests(ctx context.Context,
+	rootLogger *zerolog.Logger,
+	sess *session) error {
+	pullRequests, err := github.GetPullRequestsThatAreOpenAndHaveOneOfTheseLabels(
+		ctx,
+		worker.HTTPClient,
+		sess.AccessToken,
+		sess.Repository,
+		append(sess.Config.Update.Labels.Strings(), sess.Config.Merge.Labels.Strings()...),
+	)
+	if err != nil {
+		return errors.Wrap(err, "error getting pull requests")
+	}
+	if len(pullRequests) == 0 {
+		rootLogger.Debug().Msg("no pull requests available that need action")
+		return nil
+	}
+
+	var result error
+	for i := range pullRequests {
+		err = common.QueueMessage(
+			rootLogger,
+			worker.JetStreamContext,
+			worker.RateLimitKV,
+			worker.RateLimitInterval,
+			worker.PullRequestSubject+"."+uuid.NewString(),
+			fmt.Sprintf("pull_request.%d.%s.%d", sess.InstallationID, sess.Repository.NodeID, pullRequests[i].Number),
+			&common.QueuePullRequestMessage{
+				BaseMessage: common.BaseMessage{
+					InstallationID: sess.InstallationID,
+					Repository:     *sess.Repository,
+				},
+				PullRequest: pullRequests[i],
+			})
+		if err != nil {
+			rootLogger.Error().Int64("number", pullRequests[i].Number).Err(err).
+				Msg("unable to publish pull_request to queue")
+			result = multierror.Append(result, errors.Wrap(err, "unable to publish pull_request to queue"))
+			continue
+		}
+		rootLogger.Debug().Int64("number", pullRequests[i].Number).
+			Msg("published pull_request message")
+	}
+	return result
 }

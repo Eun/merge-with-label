@@ -24,35 +24,15 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		Str("repo", msg.Repository.FullName).
 		Logger()
 
-	accessToken, err := worker.getAccessToken(ctx, &logger, &msg.Repository, msg.InstallationID)
+	sess, err := worker.getSession(ctx, &logger, &msg.BaseMessage)
 	if err != nil {
-		return errors.Wrap(err, "unable to get access token")
+		return errors.Wrap(err, "unable to get session")
 	}
-
-	sha, err := github.GetLatestBaseCommitSha(ctx, worker.HTTPClient, accessToken, &msg.Repository)
-	if err != nil {
-		return errors.Wrap(err, "unable to get latest base commit sha")
-	}
-	if sha == "" {
-		logger.Debug().Msg("latest commit sha is empty")
+	if sess == nil {
 		return nil
 	}
 
-	cfg, err := worker.getConfig(ctx, &logger, accessToken, &msg.Repository, sha)
-	if err != nil {
-		return errors.Wrap(err, "unable to get config")
-	}
-	if cfg == nil {
-		logger.Debug().Msg("no config")
-		return nil
-	}
-
-	if len(cfg.Merge.Labels) == 0 && len(cfg.Update.Labels) == 0 {
-		logger.Debug().Msg("merge and update are disabled")
-		return nil
-	}
-
-	details, err := github.GetPullRequestDetails(ctx, worker.HTTPClient, accessToken, &msg.Repository, msg.PullRequest.Number)
+	details, err := github.GetPullRequestDetails(ctx, worker.HTTPClient, sess.AccessToken, &msg.Repository, msg.PullRequest.Number)
 	if err != nil {
 		return errors.Wrap(err, "error getting pull request details")
 	}
@@ -68,7 +48,7 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 	}
 
 	// update logic
-	stopLogic, didUpdatePullRequest, err := worker.updatePullRequest(ctx, &logger, cfg, &msg.Repository, details, accessToken)
+	stopLogic, didUpdatePullRequest, err := worker.updatePullRequest(ctx, &logger, sess, details)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -76,7 +56,7 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return nil
 	}
 
-	if didUpdatePullRequest && cfg.Merge.Labels.ContainsOneOf(details.Labels...) != "" {
+	if didUpdatePullRequest && sess.Config.Merge.Labels.ContainsOneOf(details.Labels...) != "" {
 		logger.Debug().Msg("not merging, because pull request was just updated")
 		return pushBackError{delay: worker.DurationToWaitAfterUpdateBranch}
 	}
@@ -84,11 +64,9 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 	stopLogic, didMergePullRequest, err := worker.mergePullRequest(
 		ctx,
 		&logger,
-		cfg,
-		&msg.Repository,
+		sess,
 		msg.PullRequest.Number,
 		details,
-		accessToken,
 	)
 	if err != nil {
 		logger.Error().Err(err).Msg("merge pull request failed")
@@ -98,9 +76,9 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return nil
 	}
 
-	if didMergePullRequest && cfg.Merge.DeleteBranch {
+	if didMergePullRequest && sess.Config.Merge.DeleteBranch {
 		logger.Info().Str("branch", details.HeadRefName).Msg("deleting branch")
-		if err := github.DeleteRef(ctx, worker.HTTPClient, accessToken, details.HeadRefID); err != nil {
+		if err := github.DeleteRef(ctx, worker.HTTPClient, sess.AccessToken, details.HeadRefID); err != nil {
 			return errors.New("unable to delete branch")
 		}
 	}
@@ -110,15 +88,14 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 func (worker *pullRequestWorker) updatePullRequest(
 	ctx context.Context,
 	rootLogger *zerolog.Logger,
-	cfg *ConfigV1,
-	repository *common.Repository,
+	sess *session,
 	details *github.PullRequestDetails,
-	accessToken string) (stopLogic, didUpdatePullRequest bool, err error) {
-	if len(cfg.Update.Labels) == 0 {
+) (stopLogic, didUpdatePullRequest bool, err error) {
+	if len(sess.Config.Update.Labels) == 0 {
 		return false, false, nil
 	}
 
-	if cfg.Update.Labels.ContainsOneOf(details.Labels...) == "" {
+	if sess.Config.Update.Labels.ContainsOneOf(details.Labels...) == "" {
 		return false, false, nil
 	}
 
@@ -131,8 +108,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 		if err := worker.CreateOrUpdateCheckRun(
 			ctx,
 			rootLogger,
-			accessToken,
-			repository,
+			sess,
 			details.ID,
 			details.LastCommitSha,
 			"COMPLETED",
@@ -144,7 +120,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 		return true, false, nil
 	}
 
-	result, err := worker.shouldSkipUpdate(ctx, rootLogger, cfg, details)
+	result, err := worker.shouldSkipUpdate(ctx, rootLogger, sess.Config, details)
 	if err != nil {
 		return false, false, errors.WithStack(err)
 	}
@@ -152,8 +128,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 		if err := worker.CreateOrUpdateCheckRun(
 			ctx,
 			rootLogger,
-			accessToken,
-			repository,
+			sess,
 			details.ID,
 			details.LastCommitSha,
 			"COMPLETED",
@@ -169,8 +144,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 	if err := worker.CreateOrUpdateCheckRun(
 		ctx,
 		rootLogger,
-		accessToken,
-		repository,
+		sess,
 		details.ID,
 		details.LastCommitSha,
 		"COMPLETED",
@@ -179,14 +153,13 @@ func (worker *pullRequestWorker) updatePullRequest(
 	); err != nil {
 		return false, false, errors.WithStack(err)
 	}
-	if err := github.UpdatePullRequest(ctx, worker.HTTPClient, accessToken, details.ID, details.LastCommitSha); err != nil {
+	if err := github.UpdatePullRequest(ctx, worker.HTTPClient, sess.AccessToken, details.ID, details.LastCommitSha); err != nil {
 		var graphQLErrors github.GraphQLErrors
 		if errors.As(err, &graphQLErrors) {
 			if err := worker.CreateOrUpdateCheckRun(
 				ctx,
 				rootLogger,
-				accessToken,
-				repository,
+				sess,
 				details.ID,
 				details.LastCommitSha,
 				"COMPLETED",
@@ -202,8 +175,7 @@ func (worker *pullRequestWorker) updatePullRequest(
 	if err := worker.CreateOrUpdateCheckRun(
 		ctx,
 		rootLogger,
-		accessToken,
-		repository,
+		sess,
 		details.ID,
 		details.LastCommitSha,
 		"COMPLETED",
@@ -218,17 +190,15 @@ func (worker *pullRequestWorker) updatePullRequest(
 func (worker *pullRequestWorker) mergePullRequest(
 	ctx context.Context,
 	rootLogger *zerolog.Logger,
-	cfg *ConfigV1,
-	repository *common.Repository,
+	sess *session,
 	number int64,
 	details *github.PullRequestDetails,
-	accessToken string,
 ) (stopLogic, didMerge bool, err error) {
-	if cfg.Merge.Labels.ContainsOneOf(details.Labels...) == "" {
+	if sess.Config.Merge.Labels.ContainsOneOf(details.Labels...) == "" {
 		return false, false, nil
 	}
 
-	result, err := worker.shouldSkipMerge(ctx, rootLogger, cfg, details)
+	result, err := worker.shouldSkipMerge(ctx, rootLogger, sess.Config, details)
 	if err != nil {
 		return false, false, errors.WithStack(err)
 	}
@@ -236,8 +206,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 		if err := worker.CreateOrUpdateCheckRun(
 			ctx,
 			rootLogger,
-			accessToken,
-			repository,
+			sess,
 			details.ID,
 			details.LastCommitSha,
 			"COMPLETED",
@@ -253,8 +222,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 	if err := worker.CreateOrUpdateCheckRun(
 		ctx,
 		rootLogger,
-		accessToken,
-		repository,
+		sess,
 		details.ID,
 		details.LastCommitSha,
 		"COMPLETED",
@@ -267,10 +235,10 @@ func (worker *pullRequestWorker) mergePullRequest(
 	if err := github.MergePullRequest(
 		ctx,
 		worker.HTTPClient,
-		accessToken,
+		sess.AccessToken,
 		details.ID,
 		details.LastCommitSha,
-		cfg.Merge.Strategy.GithubString(),
+		sess.Config.Merge.Strategy.GithubString(),
 		fmt.Sprintf("%s (#%d)", details.Title, number),
 	); err != nil {
 		var graphQLErrors github.GraphQLErrors
@@ -278,8 +246,7 @@ func (worker *pullRequestWorker) mergePullRequest(
 			if err := worker.CreateOrUpdateCheckRun(
 				ctx,
 				rootLogger,
-				accessToken,
-				repository,
+				sess,
 				details.ID,
 				details.LastCommitSha,
 				"COMPLETED",

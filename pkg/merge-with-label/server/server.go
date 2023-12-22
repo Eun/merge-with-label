@@ -132,11 +132,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		return
 	}
 
-	pullRequests := req.CheckRun.PullRequests
-	for i := range req.CheckRun.CheckSuite.PullRequests {
-		pullRequests = append(pullRequests, req.CheckRun.CheckSuite.PullRequests[i])
-	}
-
+	pullRequests := append(req.CheckRun.PullRequests, req.CheckRun.CheckSuite.PullRequests...)
 	for i := range pullRequests {
 		if pullRequests[i].Number == 0 {
 			logger.Debug().Msgf("no pull_requests.%d.number present in request", i)
@@ -146,7 +142,6 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		err := h.queuePullRequestMessage(
 			logger,
 			eventID,
-			req.Installation.ID,
 			&common.Repository{
 				NodeID:    req.Repository.NodeID,
 				FullName:  req.Repository.FullName,
@@ -154,6 +149,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 				OwnerName: req.Repository.Owner.Login,
 				Private:   req.Repository.Private,
 			},
+			req.Installation.ID,
 			&common.PullRequest{
 				Number: pullRequests[i].Number,
 			})
@@ -224,7 +220,6 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 	err := h.queuePullRequestMessage(
 		logger,
 		eventID,
-		req.Installation.ID,
 		&common.Repository{
 			NodeID:    req.Repository.NodeID,
 			FullName:  req.Repository.FullName,
@@ -232,6 +227,7 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 			OwnerName: req.Repository.Owner.Login,
 			Private:   req.Repository.Private,
 		},
+		req.Installation.ID,
 		&common.PullRequest{
 			Number: req.PullRequest.Number,
 		})
@@ -301,7 +297,6 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 	err := h.queuePullRequestMessage(
 		logger,
 		eventID,
-		req.Installation.ID,
 		&common.Repository{
 			NodeID:    req.Repository.NodeID,
 			FullName:  req.Repository.FullName,
@@ -309,6 +304,7 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 			OwnerName: req.Repository.Owner.Login,
 			Private:   req.Repository.Private,
 		},
+		req.Installation.ID,
 		&common.PullRequest{
 			Number: req.PullRequest.Number,
 		})
@@ -432,8 +428,8 @@ func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, body []by
 func (h *Handler) queuePullRequestMessage(
 	logger *zerolog.Logger,
 	eventID string,
-	installationID int64,
 	repository *common.Repository,
+	installationID int64,
 	pullRequest *common.PullRequest,
 ) error {
 	return common.QueueMessage(
