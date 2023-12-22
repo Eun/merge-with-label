@@ -150,7 +150,7 @@ func handleMessage[T common.Message](worker *Worker, logger *zerolog.Logger, msg
 	}
 
 	var m T
-	if err := json.Unmarshal(msg.Data, m); err != nil {
+	if err := json.Unmarshal(msg.Data, &m); err != nil {
 		logger.Error().Err(err).Msg("unable to decode queue message")
 		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
 			logger.Error().Err(err).Msg("unable to nak message")
