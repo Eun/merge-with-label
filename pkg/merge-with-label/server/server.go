@@ -108,12 +108,6 @@ func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body [
 		return nil
 	}
 
-	if req.Action != "completed" {
-		rootLogger.Debug().Msg("action is not completed")
-		h.respond(w, http.StatusOK, "ok")
-		return nil
-	}
-
 	if h.AllowOnlyPublicRepositories && req.Repository.Private {
 		rootLogger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
 		h.respond(w, http.StatusOK, "ok")
@@ -145,6 +139,12 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error().Err(err).Msg("unable to decode request")
 		h.respond(w, http.StatusBadRequest, "bad request")
+		return
+	}
+
+	if req.Action != "completed" {
+		logger.Debug().Msg("action is not completed")
+		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
