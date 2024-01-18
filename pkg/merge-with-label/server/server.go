@@ -86,7 +86,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePullRequestReview(&logger, githubID, body, w)
 		return
 	case "push":
-		h.handlePush(&logger, githubID, baseRequest, w)
+		h.handlePush(&logger, githubID, body, w)
 		return
 	case "status":
 		h.handleStatus(&logger, githubID, baseRequest, w)
@@ -326,23 +326,40 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 }
 
 //nolint:dupl // very similar to handleStatus but keep it separated for readability
-func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
+func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+	var req struct {
+		BaseRequest
+		Deleted bool `json:"deleted"`
+	}
+
+	if err := json.Unmarshal(body, &req); err != nil {
+		logger.Error().Err(err).Msg("unable to decode request")
+		h.respond(w, http.StatusBadRequest, "bad request")
+		return
+	}
+
+	if req.Deleted {
+		// no need to handle delete operations
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
 	err := common.QueueMessage(
 		logger,
 		h.JetStreamContext,
 		h.RateLimitKV,
 		h.RateLimitInterval,
 		h.PushSubject+"."+eventID,
-		fmt.Sprintf("push.%d.%s", baseRequest.Installation.ID, baseRequest.Repository.NodeID),
+		fmt.Sprintf("push.%d.%s", req.Installation.ID, req.Repository.NodeID),
 		&common.QueuePushMessage{
 			BaseMessage: common.BaseMessage{
-				InstallationID: baseRequest.Installation.ID,
+				InstallationID: req.Installation.ID,
 				Repository: common.Repository{
-					NodeID:    baseRequest.Repository.NodeID,
-					FullName:  baseRequest.Repository.FullName,
-					Name:      baseRequest.Repository.Name,
-					OwnerName: baseRequest.Repository.Owner.Login,
-					Private:   baseRequest.Repository.Private,
+					NodeID:    req.Repository.NodeID,
+					FullName:  req.Repository.FullName,
+					Name:      req.Repository.Name,
+					OwnerName: req.Repository.Owner.Login,
+					Private:   req.Repository.Private,
 				},
 			},
 		})
