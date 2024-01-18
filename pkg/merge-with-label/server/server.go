@@ -328,7 +328,8 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
-		Deleted bool `json:"deleted"`
+		Deleted bool   `json:"deleted"`
+		Ref     string `json:"ref"`
 	}
 
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -339,6 +340,14 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 
 	if req.Deleted {
 		// no need to handle delete operations
+		h.respond(w, http.StatusOK, "ok")
+		return
+	}
+
+	if req.Ref != "refs/heads/"+req.Repository.DefaultBranch {
+		// no need to handle pushes that are not targeted to the master branch.
+		// pushes to branches will only be handled when there is a pull request open
+		// and if a pull request is open, github will call the pull_request synchronize event.
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
