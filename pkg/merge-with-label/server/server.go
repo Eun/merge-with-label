@@ -325,7 +325,6 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 	h.respond(w, http.StatusOK, "ok")
 }
 
-//nolint:dupl // very similar to handleStatus but keep it separated for readability
 func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
@@ -371,7 +370,6 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 	h.respond(w, http.StatusOK, "ok")
 }
 
-//nolint:dupl // very similar to handlePush but keep it separated for readability
 func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
 	err := common.QueueMessage(
 		logger,
