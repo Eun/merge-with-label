@@ -148,15 +148,16 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		return
 	}
 
-	pullRequests := req.CheckRun.PullRequests
-	pullRequests = append(pullRequests, req.CheckRun.CheckSuite.PullRequests...)
-
-	for i := range pullRequests {
-		if pullRequests[i].Number == 0 {
-			logger.Debug().Msgf("no pull_requests.%d.number present in request", i)
+	// remove duplicates
+	pullRequests := make(map[int64]struct{})
+	for _, request := range append(req.CheckRun.PullRequests, req.CheckRun.CheckSuite.PullRequests...) {
+		if request.Number == 0 {
 			continue
 		}
+		pullRequests[request.Number] = struct{}{}
+	}
 
+	for number := range pullRequests {
 		err := h.queuePullRequestMessage(
 			logger,
 			eventID,
@@ -169,7 +170,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 			},
 			req.Installation.ID,
 			&common.PullRequest{
-				Number: pullRequests[i].Number,
+				Number: number,
 			})
 		if err != nil {
 			logger.Error().Err(err).Msg("unable to queue message")
