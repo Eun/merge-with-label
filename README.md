@@ -88,6 +88,7 @@ update:
    - Pull request
    - Pull request review
    - Push
+   - Status
 2. Create a private key and save it
 3. Note down the app id
 4. Spin up the instance somewhere using `docker compose`
