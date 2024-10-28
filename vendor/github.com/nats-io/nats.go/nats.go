@@ -47,7 +47,7 @@ import (
 
 // Default Constants
 const (
-	Version                   = "1.34.1"
+	Version                   = "1.37.0"
 	DefaultURL                = "nats://127.0.0.1:4222"
 	DefaultPort               = 4222
 	DefaultMaxReconnect       = 60
@@ -160,7 +160,7 @@ func GetDefaultOptions() Options {
 	}
 }
 
-// DEPRECATED: Use GetDefaultOptions() instead.
+// Deprecated: Use GetDefaultOptions() instead.
 // DefaultOptions is not safe for use by multiple clients.
 // For details see #308.
 var DefaultOptions = GetDefaultOptions()
@@ -386,7 +386,7 @@ type Options struct {
 	// DisconnectedCB sets the disconnected handler that is called
 	// whenever the connection is disconnected.
 	// Will not be called if DisconnectedErrCB is set
-	// DEPRECATED. Use DisconnectedErrCB which passes error that caused
+	// Deprecated. Use DisconnectedErrCB which passes error that caused
 	// the disconnect event.
 	DisconnectedCB ConnHandler
 
@@ -450,7 +450,7 @@ type Options struct {
 	TokenHandler AuthTokenHandler
 
 	// Dialer allows a custom net.Dialer when forming connections.
-	// DEPRECATED: should use CustomDialer instead.
+	// Deprecated: should use CustomDialer instead.
 	Dialer *net.Dialer
 
 	// CustomDialer allows to specify a custom dialer (not necessarily
@@ -1108,7 +1108,7 @@ func DisconnectErrHandler(cb ConnErrHandler) Option {
 }
 
 // DisconnectHandler is an Option to set the disconnected handler.
-// DEPRECATED: Use DisconnectErrHandler.
+// Deprecated: Use DisconnectErrHandler.
 func DisconnectHandler(cb ConnHandler) Option {
 	return func(o *Options) error {
 		o.DisconnectedCB = cb
@@ -1280,7 +1280,7 @@ func SyncQueueLen(max int) Option {
 
 // Dialer is an Option to set the dialer which will be used when
 // attempting to establish a connection.
-// DEPRECATED: Should use CustomDialer instead.
+// Deprecated: Should use CustomDialer instead.
 func Dialer(dialer *net.Dialer) Option {
 	return func(o *Options) error {
 		o.Dialer = dialer
@@ -1397,7 +1397,7 @@ func TLSHandshakeFirst() Option {
 // Handler processing
 
 // SetDisconnectHandler will set the disconnect event handler.
-// DEPRECATED: Use SetDisconnectErrHandler
+// Deprecated: Use SetDisconnectErrHandler
 func (nc *Conn) SetDisconnectHandler(dcb ConnHandler) {
 	if nc == nil {
 		return
@@ -1513,7 +1513,7 @@ func processUrlString(url string) []string {
 	urls := strings.Split(url, ",")
 	var j int
 	for _, s := range urls {
-		u := strings.TrimSpace(s)
+		u := strings.TrimSuffix(strings.TrimSpace(s), "/")
 		if len(u) > 0 {
 			urls[j] = u
 			j++
@@ -2161,6 +2161,47 @@ func (nc *Conn) waitForExits() {
 	nc.wg.Wait()
 }
 
+// ForceReconnect forces a reconnect attempt to the server.
+// This is a non-blocking call and will start the reconnect
+// process without waiting for it to complete.
+//
+// If the connection is already in the process of reconnecting,
+// this call will force an immediate reconnect attempt (bypassing
+// the current reconnect delay).
+func (nc *Conn) ForceReconnect() error {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	if nc.isClosed() {
+		return ErrConnectionClosed
+	}
+	if nc.isReconnecting() {
+		// if we're already reconnecting, force a reconnect attempt
+		// even if we're in the middle of a backoff
+		if nc.rqch != nil {
+			close(nc.rqch)
+		}
+		return nil
+	}
+
+	// Clear any queued pongs
+	nc.clearPendingFlushCalls()
+
+	// Clear any queued and blocking requests.
+	nc.clearPendingRequestCalls()
+
+	// Stop ping timer if set.
+	nc.stopPingTimer()
+
+	// Go ahead and make sure we have flushed the outbound
+	nc.bw.flush()
+	nc.conn.Close()
+
+	nc.changeConnStatus(RECONNECTING)
+	go nc.doReconnect(nil, true)
+	return nil
+}
+
 // ConnectedUrl reports the connected server's URL
 func (nc *Conn) ConnectedUrl() string {
 	if nc == nil {
@@ -2420,7 +2461,7 @@ func (nc *Conn) connect() (bool, error) {
 		nc.setup()
 		nc.changeConnStatus(RECONNECTING)
 		nc.bw.switchToPending()
-		go nc.doReconnect(ErrNoServers)
+		go nc.doReconnect(ErrNoServers, false)
 		err = nil
 	} else {
 		nc.current = nil
@@ -2720,7 +2761,7 @@ func (nc *Conn) stopPingTimer() {
 
 // Try to reconnect using the option parameters.
 // This function assumes we are allowed to reconnect.
-func (nc *Conn) doReconnect(err error) {
+func (nc *Conn) doReconnect(err error, forceReconnect bool) {
 	// We want to make sure we have the other watchers shutdown properly
 	// here before we proceed past this point.
 	nc.waitForExits()
@@ -2776,7 +2817,8 @@ func (nc *Conn) doReconnect(err error) {
 			break
 		}
 
-		doSleep := i+1 >= len(nc.srvPool)
+		doSleep := i+1 >= len(nc.srvPool) && !forceReconnect
+		forceReconnect = false
 		nc.mu.Unlock()
 
 		if !doSleep {
@@ -2803,6 +2845,12 @@ func (nc *Conn) doReconnect(err error) {
 			select {
 			case <-rqch:
 				rt.Stop()
+
+				// we need to reset the rqch channel to avoid
+				// closing a closed channel in the next iteration
+				nc.mu.Lock()
+				nc.rqch = make(chan struct{})
+				nc.mu.Unlock()
 			case <-rt.C:
 			}
 		}
@@ -2872,17 +2920,18 @@ func (nc *Conn) doReconnect(err error) {
 		// Done with the pending buffer
 		nc.bw.doneWithPending()
 
-		// This is where we are truly connected.
-		nc.status = CONNECTED
+		// Queue up the correct callback. If we are in initial connect state
+		// (using retry on failed connect), we will call the ConnectedCB,
+		// otherwise the ReconnectedCB.
+		if nc.Opts.ReconnectedCB != nil && !nc.initc {
+			nc.ach.push(func() { nc.Opts.ReconnectedCB(nc) })
+		} else if nc.Opts.ConnectedCB != nil && nc.initc {
+			nc.ach.push(func() { nc.Opts.ConnectedCB(nc) })
+		}
 
 		// If we are here with a retry on failed connect, indicate that the
 		// initial connect is now complete.
 		nc.initc = false
-
-		// Queue up the reconnect callback.
-		if nc.Opts.ReconnectedCB != nil {
-			nc.ach.push(func() { nc.Opts.ReconnectedCB(nc) })
-		}
 
 		// Release lock here, we will return below.
 		nc.mu.Unlock()
@@ -2926,7 +2975,7 @@ func (nc *Conn) processOpErr(err error) {
 		// Clear any queued pongs, e.g. pending flush calls.
 		nc.clearPendingFlushCalls()
 
-		go nc.doReconnect(err)
+		go nc.doReconnect(err, false)
 		nc.mu.Unlock()
 		return
 	}
@@ -3753,7 +3802,7 @@ func readMIMEHeader(tp *textproto.Reader) (textproto.MIMEHeader, error) {
 		}
 
 		// Process key fetching original case.
-		i := bytes.IndexByte([]byte(kv), ':')
+		i := strings.IndexByte(kv, ':')
 		if i < 0 {
 			return nil, ErrBadHeaderMsg
 		}
@@ -3766,8 +3815,7 @@ func readMIMEHeader(tp *textproto.Reader) (textproto.MIMEHeader, error) {
 		for i < len(kv) && (kv[i] == ' ' || kv[i] == '\t') {
 			i++
 		}
-		value := string(kv[i:])
-		m[key] = append(m[key], value)
+		m[key] = append(m[key], kv[i:])
 		if err != nil {
 			return m, err
 		}
@@ -4854,7 +4902,8 @@ func (s *Subscription) processNextMsgDelivered(msg *Msg) error {
 }
 
 // Queued returns the number of queued messages in the client for this subscription.
-// DEPRECATED: Use Pending()
+//
+// Deprecated: Use Pending()
 func (s *Subscription) QueuedMsgs() (int, error) {
 	m, _, err := s.Pending()
 	return int(m), err
@@ -5435,7 +5484,7 @@ func (nc *Conn) drainConnection() {
 // Drain will put a connection into a drain state. All subscriptions will
 // immediately be put into a drain state. Upon completion, the publishers
 // will be drained and can not publish any additional messages. Upon draining
-// of the publishers, the connection will be closed. Use the ClosedCB()
+// of the publishers, the connection will be closed. Use the ClosedCB
 // option to know when the connection has moved from draining to closed.
 //
 // See note in Subscription.Drain for JetStream subscriptions.
