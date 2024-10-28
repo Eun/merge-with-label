@@ -31,7 +31,7 @@ jobs:
     name: Vulnerability scanner
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.1.5
+      - uses: actions/checkout@v4.1.7
       - uses: actions/setup-go@v5
       # we cannot use nancy-github-action because it is outdated, so it's better to use the latest
       # docker image for the validation
