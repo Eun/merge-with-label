@@ -13,9 +13,10 @@ github.com/hashicorp/errwrap
 # github.com/hashicorp/go-multierror v1.1.1
 ## explicit; go 1.13
 github.com/hashicorp/go-multierror
-# github.com/klauspost/compress v1.17.11
-## explicit; go 1.21
+# github.com/klauspost/compress v1.18.0
+## explicit; go 1.22
 github.com/klauspost/compress/flate
+github.com/klauspost/compress/internal/le
 # github.com/kr/pretty v0.1.0
 ## explicit
 # github.com/kr/text v0.2.0
@@ -26,8 +27,8 @@ github.com/mattn/go-colorable
 # github.com/mattn/go-isatty v0.0.20
 ## explicit; go 1.15
 github.com/mattn/go-isatty
-# github.com/nats-io/nats.go v1.39.1
-## explicit; go 1.22.0
+# github.com/nats-io/nats.go v1.41.0
+## explicit; go 1.23.0
 github.com/nats-io/nats.go
 github.com/nats-io/nats.go/encoders/builtin
 github.com/nats-io/nats.go/internal/parser
