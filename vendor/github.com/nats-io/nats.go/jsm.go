@@ -243,6 +243,14 @@ type StreamConfig struct {
 	// Template identifies the template that manages the Stream. Deprecated:
 	// This feature is no longer supported.
 	Template string `json:"template_owner,omitempty"`
+
+	// AllowMsgTTL allows header initiated per-message TTLs.
+	// This feature requires nats-server v2.11.0 or later.
+	AllowMsgTTL bool `json:"allow_msg_ttl"`
+
+	// Enables and sets a duration for adding server markers for delete, purge and max age limits.
+	// This feature requires nats-server v2.11.0 or later.
+	SubjectDeleteMarkerTTL time.Duration `json:"subject_delete_marker_ttl,omitempty"`
 }
 
 // SubjectTransformConfig is for applying a subject transform (to matching messages) before doing anything else when a new message is received.
@@ -543,6 +551,10 @@ func (js *js) upsertConsumer(stream, consumerName string, cfg *ConsumerConfig, o
 			return nil, ErrConsumerNotFound
 		}
 		return nil, info.Error
+	}
+
+	if info.Error == nil && info.ConsumerInfo == nil {
+		return nil, ErrConsumerCreationResponseEmpty
 	}
 
 	// check whether multiple filter subjects (if used) are reflected in the returned ConsumerInfo
@@ -1770,6 +1782,11 @@ func getJSContextOpts(defs *jsOpts, opts ...JSOpt) (*jsOpts, context.CancelFunc,
 	if o.pre == _EMPTY_ {
 		o.pre = defs.pre
 	}
-
+	if o.ctx != nil {
+		// if context does not have a deadline, use timeout from js context
+		if _, hasDeadline := o.ctx.Deadline(); !hasDeadline {
+			o.ctx, cancel = context.WithTimeout(o.ctx, defs.wait)
+		}
+	}
 	return &o, cancel, nil
 }
