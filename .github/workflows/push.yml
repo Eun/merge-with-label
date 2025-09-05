@@ -15,7 +15,7 @@ jobs:
         uses: Eun/go-mod-details@v1.0.7
         id: go-mod-details
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ steps.go-mod-details.outputs.go_version }}
       - name: Lint
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5.0.0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
       # we cannot use nancy-github-action because it is outdated, so it's better to use the latest
       # docker image for the validation
       - name: nancy
@@ -51,7 +51,7 @@ jobs:
         uses: Eun/go-mod-details@v1.0.7
         id: go-mod-details
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ steps.go-mod-details.outputs.go_version }}
       - name: Test
