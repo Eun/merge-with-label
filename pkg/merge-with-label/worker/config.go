@@ -196,7 +196,8 @@ func (worker *Worker) getLatestConfig(
 		return nil, errors.Wrap(err, "unable to encode config")
 	}
 	rootLogger.Debug().Msg("storing config in cache")
-	if err := worker.Store.KVSet(ctx, kvBucketConfigs, key, encoded, 24*time.Hour); err != nil {
+	const configTTL = 24 * time.Hour //nolint:mnd // 24 hours is intentional
+	if err := worker.Store.KVSet(ctx, kvBucketConfigs, key, encoded, configTTL); err != nil {
 		return nil, errors.Wrap(err, "unable to store config in store")
 	}
 	return cfg, nil

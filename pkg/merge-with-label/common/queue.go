@@ -94,7 +94,8 @@ func prepareEnqueue(
 	for i := range 8 {
 		b[i] = byte(now >> (i * 8)) //nolint:mnd // bit shift per byte
 	}
-	if err := store.KVSet(ctx, kvBucketRateLimit, dedupKey, b, rateLimitInterval*2); err != nil {
+	const rateLimitTTLMultiplier = 2
+	if err := store.KVSet(ctx, kvBucketRateLimit, dedupKey, b, rateLimitInterval*rateLimitTTLMultiplier); err != nil {
 		return nil, time.Time{}, errors.Wrap(err, "unable to store rate limit in store")
 	}
 

@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
-
-	"slices"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"

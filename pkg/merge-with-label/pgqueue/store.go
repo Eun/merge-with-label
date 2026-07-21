@@ -260,6 +260,27 @@ func reschedule(
 // Key-value cache
 // -----------------------------------------------------------------------
 
+// kvCleanupInterval is how often the background cleaner runs.
+const kvCleanupInterval = 10 * time.Minute //nolint:mnd // 10 minutes is intentional
+
+// StartKVCleaner launches a background goroutine that periodically deletes
+// expired rows from mwl_kv. It runs every kvCleanupInterval and stops when
+// ctx is canceled. Call this once from server startup.
+func (s *Store) StartKVCleaner(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(kvCleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = s.pool.Exec(ctx, `DELETE FROM mwl_kv WHERE expires_at IS NOT NULL AND expires_at <= NOW()`)
+			}
+		}
+	}()
+}
+
 // KVGet retrieves a value. Returns nil, nil on cache miss or expiry.
 func (s *Store) KVGet(ctx context.Context, bucket, key string) ([]byte, error) {
 	var value []byte

@@ -3,13 +3,13 @@ package worker
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
-	"slices"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )

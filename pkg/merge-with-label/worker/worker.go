@@ -33,7 +33,7 @@ type Worker struct {
 	MaxAttempts int // jobs exceeding this are permanently deleted; 0 = unlimited
 
 	// MaxConcurrentJobs limits how many jobs run in parallel per queue lane.
-	// Defaults to 1 if zero, keeping existing sequential behaviour.
+	// Defaults to 1 if zero, keeping existing sequential behavior.
 	MaxConcurrentJobs int
 
 	MaxDurationForRepoWorker        time.Duration
@@ -60,7 +60,7 @@ type pushBackError struct {
 func (e pushBackError) Error() string { return "" }
 
 // Consume starts polling both queue lanes concurrently until the context is
-// cancelled or Shutdown is called.
+// canceled or Shutdown is called.
 func (w *Worker) Consume() error {
 	w.closeCh = make(chan struct{})
 	errChan := make(chan error, 2) //nolint:mnd // 2 queue types

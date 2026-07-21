@@ -67,6 +67,9 @@ func main() {
 	}
 	logger.Info().Msg("database migrations complete")
 
+	store.StartKVCleaner(ctx)
+	logger.Debug().Msg("kv cleaner started")
+
 	srv := http.Server{
 		Addr:              address,
 		ReadTimeout:       1 * time.Second,

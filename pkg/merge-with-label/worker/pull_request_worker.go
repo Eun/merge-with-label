@@ -48,7 +48,7 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 
 	// PR-state deduplication: if we already processed this exact head SHA for
 	// this PR, skip the update/merge logic to avoid double-triggering.
-	// This is the second defence line — it catches the case where two events
+	// This is the second defense line — it catches the case where two events
 	// with different dedup keys both get dequeued before either is processed
 	// (e.g. two concurrent worker replicas, or events arriving after the first
 	// job was already consumed).

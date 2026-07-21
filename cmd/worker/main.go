@@ -48,7 +48,7 @@ func main() {
 		logger.Error().Msg("PRIVATE_KEY is not set")
 		return
 	}
-	privateKeyBytes, err := os.ReadFile(privateKeyFile) //nolint:gosec // G703: path is from env, not user input
+	privateKeyBytes, err := os.ReadFile(privateKeyFile) //nolint:gosec // path is from env var, not user input
 	if err != nil {
 		logger.Error().
 			Err(err).
