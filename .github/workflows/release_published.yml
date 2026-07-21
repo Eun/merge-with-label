@@ -10,20 +10,14 @@ jobs:
     permissions: write-all
     runs-on: ubuntu-latest
     steps:
-      -
-        uses: actions/checkout@v6.0.2
-      -
-        name: Install mise
-        uses: jdx/mise-action@v4
-      -
-        name: Login to Docker Registry
+      - uses: actions/checkout@v6.0.2
+      - name: Login to Docker Registry
         uses: docker/login-action@v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      -
-        name: Build and push
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           push: true
