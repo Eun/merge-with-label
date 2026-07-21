@@ -80,7 +80,9 @@ func main() {
 
 		Store: store,
 
-		RetryWait: cmd.GetSetting[time.Duration](cmd.MessageRetryWaitSetting),
+		RetryWait:         cmd.GetSetting[time.Duration](cmd.MessageRetryWaitSetting),
+		MaxAttempts:       cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting),
+		MaxConcurrentJobs: cmd.GetSetting[int](cmd.MaxConcurrentJobsSetting),
 
 		MaxDurationForRepoWorker:        time.Minute,
 		MaxDurationForPullRequestWorker: time.Minute,

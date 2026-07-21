@@ -2,21 +2,6 @@ package common
 
 import "fmt"
 
-// MsgType constants identify the queue table's msg_type discriminator.
-// There are only two logical work items:
-//
-//   - MsgTypeRepo  – "something changed on the default branch of this repo;
-//     find all eligible open PRs and process each one."
-//     Sources: push, status, check_run (repo-level).
-//
-//   - MsgTypePR    – "process this specific PR."
-//     Sources: pull_request, pull_request_review, check_run (PR-level),
-//     and the fan-out from MsgTypeRepo workers.
-const (
-	MsgTypeRepo = "repo"
-	MsgTypePR   = "pull_request"
-)
-
 type Repository struct {
 	FullName  string `json:"full_name"`
 	Name      string `json:"name"`

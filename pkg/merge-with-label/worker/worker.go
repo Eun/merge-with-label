@@ -29,7 +29,12 @@ type Worker struct {
 
 	Store *pgqueue.Store
 
-	RetryWait time.Duration
+	RetryWait   time.Duration
+	MaxAttempts int // jobs exceeding this are permanently deleted; 0 = unlimited
+
+	// MaxConcurrentJobs limits how many jobs run in parallel per queue lane.
+	// Defaults to 1 if zero, keeping existing sequential behaviour.
+	MaxConcurrentJobs int
 
 	MaxDurationForRepoWorker        time.Duration
 	MaxDurationForPullRequestWorker time.Duration
@@ -63,66 +68,116 @@ func (w *Worker) Consume() error {
 	repoMsgWorker := &repoWorker{Worker: w}
 	prMsgWorker := &pullRequestWorker{Worker: w}
 
-	startPoller := func(msgType string, handle func(*zerolog.Logger, []byte) (string, []byte, error)) {
+	maxConcurrent := w.MaxConcurrentJobs
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+
+	// startPoller is a generic polling loop parameterised by the dequeue and
+	// reschedule functions so each queue table gets its own dedicated goroutine
+	// without any shared msgType string. Each dequeued job is dispatched into
+	// its own goroutine; a semaphore caps parallelism to MaxConcurrentJobs so
+	// a slow or permanently-failing job never blocks work on other jobs.
+	type dequeueFn func(context.Context) (*pgqueue.Job, error)
+	type rescheduleFn func(context.Context, int64, string, []byte, time.Duration, int) (bool, error)
+
+	startPoller := func(
+		queueName string,
+		dequeueFn dequeueFn,
+		rescheduleFn rescheduleFn,
+		handle func(*zerolog.Logger, []byte) (dedupKey string, payload []byte, err error),
+	) {
 		go func() {
+			sem := make(chan struct{}, maxConcurrent)
 			for {
 				select {
 				case <-w.closeCh:
 					return
 				default:
 				}
-				job, err := w.Store.Dequeue(context.Background(), msgType)
+
+				// Acquire a slot before dequeueing so we don't pull a job we
+				// cannot start immediately.
+				select {
+				case sem <- struct{}{}:
+				case <-w.closeCh:
+					return
+				}
+
+				job, err := dequeueFn(context.Background())
 				if err != nil {
-					errChan <- errors.Wrapf(err, "dequeue %s", msgType)
+					<-sem
+					errChan <- errors.Wrapf(err, "dequeue %s", queueName)
 					return
 				}
 				if job == nil {
+					<-sem
 					time.Sleep(pollInterval)
 					continue
 				}
-				w.Logger.Debug().Str("msg_type", msgType).Int64("job_id", job.ID).Msg("job dequeued")
-				dedupKey, payload, handleErr := handle(w.Logger, job.Payload)
-				if handleErr != nil {
+
+				w.Logger.Debug().Str("queue", queueName).Int64("job_id", job.ID).Msg("job dequeued")
+
+				// Process in a separate goroutine so the poller loop immediately
+				// picks up the next job (up to maxConcurrent).
+				go func(j *pgqueue.Job) {
+					defer func() { <-sem }()
+					dedupKey, payload, handleErr := handle(w.Logger, j.Payload)
+					if handleErr == nil {
+						return
+					}
 					var pbErr pushBackError
 					delay := w.RetryWait
 					if errors.As(handleErr, &pbErr) {
 						delay = pbErr.delay
 					} else {
-						w.Logger.Error().Err(handleErr).Str("msg_type", msgType).Msg("job failed")
+						w.Logger.Error().Err(handleErr).Str("queue", queueName).Msg("job failed")
 					}
-					if reschedErr := w.Store.Reschedule(
-						context.Background(), job.ID, msgType, dedupKey, payload, delay,
-					); reschedErr != nil {
+					dropped, reschedErr := rescheduleFn(
+						context.Background(), j.ID, dedupKey, payload, delay, w.MaxAttempts,
+					)
+					if reschedErr != nil {
 						w.Logger.Error().Err(reschedErr).Msg("unable to reschedule job")
 					}
-				}
+					if dropped {
+						w.Logger.Warn().
+							Str("queue", queueName).
+							Str("dedup_key", dedupKey).
+							Int("max_attempts", w.MaxAttempts).
+							Msg("job permanently removed after max attempts")
+					}
+				}(job)
 			}
 		}()
 	}
 
-	startPoller(common.MsgTypeRepo, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
-		var m common.QueueRepoMessage
-		if err := json.Unmarshal(payload, &m); err != nil {
-			return "", payload, errors.Wrap(err, "unmarshal repo message")
-		}
-		dedupKey := common.RepoDedupKey(m.Repository.NodeID)
-		if !w.isAllowed(logger, &m) {
-			return dedupKey, payload, nil
-		}
-		return dedupKey, payload, repoMsgWorker.runLogic(logger, &m)
-	})
+	startPoller("mwl_repo_queue", w.Store.DequeueRepo, w.Store.RescheduleRepo,
+		func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+			var m common.QueueRepoMessage
+			if err := json.Unmarshal(payload, &m); err != nil {
+				return "", payload, errors.Wrap(err, "unmarshal repo message")
+			}
+			dedupKey := common.RepoDedupKey(m.Repository.NodeID)
+			if !w.isAllowed(logger, &m) {
+				return dedupKey, payload, nil
+			}
+			return dedupKey, payload, repoMsgWorker.runLogic(logger, &m)
+		},
+	)
 
-	startPoller(common.MsgTypePR, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
-		var m common.QueuePRMessage
-		if err := json.Unmarshal(payload, &m); err != nil {
-			return "", payload, errors.Wrap(err, "unmarshal PR message")
-		}
-		dedupKey := common.PRDedupKey(m.Repository.NodeID, m.PullRequest.Number)
-		if !w.isAllowed(logger, &m) {
-			return dedupKey, payload, nil
-		}
-		return dedupKey, payload, prMsgWorker.runLogic(logger, &m)
-	})
+	startPoller("mwl_pr_queue", w.Store.DequeuePR, w.Store.ReschedulePR,
+		func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+			var m common.QueuePRMessage
+			if err := json.Unmarshal(payload, &m); err != nil {
+				return "", payload, errors.Wrap(err, "unmarshal PR message")
+			}
+			dedupKey := common.PRDedupKey(m.Repository.NodeID, m.PullRequest.Number)
+			if !w.isAllowed(logger, &m) {
+				return dedupKey, payload, nil
+			}
+			return dedupKey, payload, prMsgWorker.runLogic(logger, &m)
+		},
+	)
 
 	select {
 	case err := <-errChan:

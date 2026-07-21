@@ -23,7 +23,8 @@ const (
 	MessageRetryWaitSetting             Setting = "MessageRetryWait"
 	DurationBeforeMergeAfterCheckSetting   Setting = "DurationBeforeMergeAfterCheck"
 	DurationToWaitAfterUpdateBranchSetting Setting = "DurationToWaitAfterUpdateBranch"
-	MessageChannelSizePerSubjectSetting Setting = "MessageChannelSizePerSubject"
+	MessageChannelSizePerSubjectSetting    Setting = "MessageChannelSizePerSubject"
+	MaxConcurrentJobsSetting               Setting = "MaxConcurrentJobs"
 )
 
 var defaultSettings = map[Setting]any{
@@ -37,6 +38,7 @@ var defaultSettings = map[Setting]any{
 	DurationBeforeMergeAfterCheckSetting:   time.Second * 10, //nolint:mnd // allow to set defaults
 	DurationToWaitAfterUpdateBranchSetting: time.Second * 30, //nolint:mnd // allow to set defaults
 	MessageChannelSizePerSubjectSetting:    64,               //nolint:mnd // allow to set defaults
+	MaxConcurrentJobsSetting:               10,               //nolint:mnd // allow to set defaults
 }
 
 func GetSetting[T any](name Setting) (t T) {
