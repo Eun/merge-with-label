@@ -84,7 +84,7 @@ func TestRepoQueueFutureAvailableAt(t *testing.T) {
 func TestRescheduleRepo(t *testing.T) {
 	ctx := context.Background()
 	key := "repo-retry-" + t.Name()
-	payload := []byte(`{"repo":"retry"}`)
+	payload := []byte(`{"key":"` + key + `"}`)
 
 	if err := sharedStore.EnqueueRepo(ctx, key, payload, time.Time{}); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
@@ -102,12 +102,23 @@ func TestRescheduleRepo(t *testing.T) {
 		t.Error("expected not dropped (attempt 1 of 5)")
 	}
 
-	time.Sleep(5 * time.Millisecond)
-	retried, err := sharedStore.DequeueRepo(ctx)
-	if err != nil {
-		t.Fatalf("DequeueRepo retry: %v", err)
+	time.Sleep(10 * time.Millisecond)
+	// Drain until we find our key or the queue is empty.
+	var found bool
+	for i := range 20 {
+		retried, err := sharedStore.DequeueRepo(ctx)
+		if err != nil {
+			t.Fatalf("DequeueRepo retry %d: %v", i, err)
+		}
+		if retried == nil {
+			break
+		}
+		if bytes.Contains(retried.Payload, []byte(key)) {
+			found = true
+			break
+		}
 	}
-	if retried == nil {
+	if !found {
 		t.Fatal("expected rescheduled job to be available")
 	}
 }

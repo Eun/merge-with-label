@@ -13,7 +13,7 @@ import (
 )
 
 // sharedStore is a single Store instance shared across all tests in this
-// package, initialised once in TestMain. A shared container cuts total
+// package, initialized once in TestMain. A shared container cuts total
 // test time from ~20 min (1 container per test) to ~1 min.
 var sharedStore *pgqueue.Store
 

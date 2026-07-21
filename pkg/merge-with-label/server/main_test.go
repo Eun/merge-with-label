@@ -16,7 +16,7 @@ import (
 )
 
 // sharedHandler is a Handler backed by one container shared across all
-// server tests. It is initialised in TestMain.
+// server tests. It is initialized in TestMain.
 var sharedHandler *server.Handler
 
 func TestMain(m *testing.M) {
