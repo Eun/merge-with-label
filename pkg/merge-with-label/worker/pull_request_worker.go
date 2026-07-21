@@ -39,6 +39,10 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 
 	if details.State != "OPEN" {
 		logger.Debug().Msg("pull request is not open anymore")
+		// PR is closed or merged — no need to track its state anymore.
+		if err := worker.Store.DeletePRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number); err != nil {
+			logger.Warn().Err(err).Msg("unable to delete pr state for closed pr")
+		}
 		return nil
 	}
 	if details.LastCommitTime.IsZero() || details.LastCommitSha == "" {
@@ -91,10 +95,16 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return nil
 	}
 
-	if didMergePullRequest && sess.Config.Merge.DeleteBranch {
-		logger.Info().Str("branch", details.HeadRefName).Msg("deleting branch")
-		if err := github.DeleteRef(ctx, worker.HTTPClient, sess.AccessToken, details.HeadRefID); err != nil {
-			return errors.New("unable to delete branch")
+	if didMergePullRequest {
+		// PR is merged — remove its state row so mwl_pr_state stays clean.
+		if err := worker.Store.DeletePRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number); err != nil {
+			logger.Warn().Err(err).Msg("unable to delete pr state after merge")
+		}
+		if sess.Config.Merge.DeleteBranch {
+			logger.Info().Str("branch", details.HeadRefName).Msg("deleting branch")
+			if err := github.DeleteRef(ctx, worker.HTTPClient, sess.AccessToken, details.HeadRefID); err != nil {
+				return errors.New("unable to delete branch")
+			}
 		}
 	}
 	return nil

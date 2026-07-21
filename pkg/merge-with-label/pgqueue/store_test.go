@@ -405,6 +405,36 @@ func TestPRStateOverwrite(t *testing.T) {
 	}
 }
 
+func TestDeletePRState(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := store.SetPRState(ctx, "repo-del", 5, "sha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeletePRState(ctx, "repo-del", 5); err != nil {
+		t.Fatalf("DeletePRState: %v", err)
+	}
+	state, err := store.GetPRState(ctx, "repo-del", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != nil {
+		t.Error("expected nil after delete")
+	}
+}
+
+func TestDeletePRStateIdempotent(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := store.DeletePRState(ctx, "ghost-repo", 99); err != nil {
+		t.Errorf("DeletePRState on missing row: %v", err)
+	}
+}
+
 func TestPRStateScopedToRepo(t *testing.T) {
 	store, cleanup := newTestStore(t)
 	defer cleanup()
@@ -444,5 +474,31 @@ func TestWaitForSchema(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Error("WaitForSchema did not return within 5s")
+	}
+}
+
+func TestKVExpiryDeletesRowLazily(t *testing.T) {
+	// After KVGet on an expired key the row must be physically gone
+	// (lazy delete-on-miss via the CTE in KVGet).
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := store.KVSet(ctx, "lazy", "k", []byte("v"), -time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	// First read triggers the lazy delete.
+	_, _ = store.KVGet(ctx, "lazy", "k") //nolint:errcheck
+
+	// Write a fresh value with no TTL.
+	if err := store.KVSet(ctx, "lazy", "k", []byte("fresh"), 0); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.KVGet(ctx, "lazy", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "fresh" {
+		t.Errorf("expected fresh value after lazy delete, got %q", got)
 	}
 }

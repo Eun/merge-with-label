@@ -260,31 +260,22 @@ func reschedule(
 // Key-value cache
 // -----------------------------------------------------------------------
 
-// kvCleanupInterval is how often the background cleaner runs.
-const kvCleanupInterval = 10 * time.Minute //nolint:mnd // 10 minutes is intentional
-
-// StartKVCleaner launches a background goroutine that periodically deletes
-// expired rows from mwl_kv. It runs every kvCleanupInterval and stops when
-// ctx is canceled. Call this once from server startup.
-func (s *Store) StartKVCleaner(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(kvCleanupInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				_, _ = s.pool.Exec(ctx, `DELETE FROM mwl_kv WHERE expires_at IS NOT NULL AND expires_at <= NOW()`)
-			}
-		}
-	}()
-}
-
-// KVGet retrieves a value. Returns nil, nil on cache miss or expiry.
+// KVGet retrieves a value for (bucket, key). Returns nil, nil on cache miss.
+// If the row exists but has expired it is deleted atomically by the same
+// statement — no background goroutine or external scheduler required.
 func (s *Store) KVGet(ctx context.Context, bucket, key string) ([]byte, error) {
 	var value []byte
+	// The CTE first tries to delete an expired row and then selects the
+	// live one. Both arms run in a single round-trip:
+	//   - expired row  → deleted by the CTE, SELECT returns nothing → cache miss
+	//   - live row     → not touched by the CTE, SELECT returns value
+	//   - absent row   → both arms are no-ops, SELECT returns nothing → cache miss
 	err := s.pool.QueryRow(ctx, `
+		WITH deleted AS (
+			DELETE FROM mwl_kv
+			WHERE bucket = $1 AND key = $2
+			  AND expires_at IS NOT NULL AND expires_at <= NOW()
+		)
 		SELECT value FROM mwl_kv
 		WHERE bucket = $1 AND key = $2
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -339,6 +330,15 @@ func (s *Store) GetPRState(ctx context.Context, repoNodeID string, prNumber int6
 		return nil, errors.Wrap(err, "get pr state")
 	}
 	return &r, nil
+}
+
+// DeletePRState removes the cached state for a PR that is no longer open
+// (closed, merged). This keeps mwl_pr_state from accumulating dead rows.
+func (s *Store) DeletePRState(ctx context.Context, repoNodeID string, prNumber int64) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM mwl_pr_state WHERE repo_node_id = $1 AND pr_number = $2
+	`, repoNodeID, prNumber)
+	return errors.Wrap(err, "delete pr state")
 }
 
 // SetPRState upserts the last-seen head SHA for a PR.
