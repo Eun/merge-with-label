@@ -79,7 +79,7 @@ func (w *Worker) Consume() error {
 	// its own goroutine; a semaphore caps parallelism to MaxConcurrentJobs so
 	// a slow or permanently-failing job never blocks work on other jobs.
 	type dequeueFn func(context.Context) (*pgqueue.Job, error)
-	type rescheduleFn func(context.Context, int64, string, []byte, time.Duration, int) (bool, error)
+	type rescheduleFn func(context.Context, int64, string, []byte, int, time.Duration, int) (bool, error)
 
 	startPoller := func(
 		queueName string,
@@ -134,7 +134,7 @@ func (w *Worker) Consume() error {
 						w.Logger.Error().Err(handleErr).Str("queue", queueName).Msg("job failed")
 					}
 					dropped, reschedErr := rescheduleFn(
-						context.Background(), j.ID, dedupKey, payload, delay, w.MaxAttempts,
+						context.Background(), j.ID, dedupKey, payload, j.Attempts, delay, w.MaxAttempts,
 					)
 					if reschedErr != nil {
 						w.Logger.Error().Err(reschedErr).Msg("unable to reschedule job")

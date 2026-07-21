@@ -246,7 +246,9 @@ func TestKVMiss(t *testing.T) {
 
 func TestKVExpiry(t *testing.T) {
 	ctx := context.Background()
-	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("v"), -time.Millisecond); err != nil {
+	// Use -time.Second (not -time.Millisecond) to ensure the expiry is
+	// clearly in the past by the time KVGet runs.
+	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("v"), -time.Second); err != nil {
 		t.Fatalf("KVSet: %v", err)
 	}
 	got, err := sharedStore.KVGet(ctx, "test", t.Name())

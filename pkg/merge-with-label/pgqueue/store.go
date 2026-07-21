@@ -125,8 +125,9 @@ func (s *Store) WaitForSchema(ctx context.Context) error {
 
 // Job is a single dequeued row.
 type Job struct {
-	ID      int64
-	Payload []byte
+	ID       int64
+	Payload  []byte
+	Attempts int // delivery count at the time of dequeue (0 = first attempt)
 }
 
 // -----------------------------------------------------------------------
@@ -155,10 +156,11 @@ func (s *Store) DequeueRepo(ctx context.Context) (*Job, error) {
 
 // RescheduleRepo re-queues a failed repo job, or permanently removes it when
 // maxAttempts is reached. Returns (true, nil) when the job was dropped.
+// prevAttempts is Job.Attempts from the dequeued job.
 func (s *Store) RescheduleRepo(
-	ctx context.Context, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int,
+	ctx context.Context, id int64, dedupKey string, payload []byte, prevAttempts int, delay time.Duration, maxAttempts int,
 ) (bool, error) {
-	return reschedule(ctx, s.pool, "mwl_repo_queue", id, dedupKey, payload, delay, maxAttempts)
+	return reschedule(ctx, s.pool, "mwl_repo_queue", id, dedupKey, payload, prevAttempts, delay, maxAttempts)
 }
 
 // -----------------------------------------------------------------------
@@ -187,10 +189,11 @@ func (s *Store) DequeuePR(ctx context.Context) (*Job, error) {
 
 // ReschedulePR re-queues a failed PR job, or permanently removes it when
 // maxAttempts is reached. Returns (true, nil) when the job was dropped.
+// prevAttempts is Job.Attempts from the dequeued job.
 func (s *Store) ReschedulePR(
-	ctx context.Context, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int,
+	ctx context.Context, id int64, dedupKey string, payload []byte, prevAttempts int, delay time.Duration, maxAttempts int,
 ) (bool, error) {
-	return reschedule(ctx, s.pool, "mwl_pr_queue", id, dedupKey, payload, delay, maxAttempts)
+	return reschedule(ctx, s.pool, "mwl_pr_queue", id, dedupKey, payload, prevAttempts, delay, maxAttempts)
 }
 
 // -----------------------------------------------------------------------
@@ -208,8 +211,8 @@ func dequeue(ctx context.Context, pool *pgxpool.Pool, table string) (*Job, error
 			LIMIT  1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, payload
-	`).Scan(&j.ID, &j.Payload)
+		RETURNING id, payload, attempts
+	`).Scan(&j.ID, &j.Payload, &j.Attempts)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, nil //nolint:nilnil // empty queue is not an error
@@ -222,21 +225,11 @@ func dequeue(ctx context.Context, pool *pgxpool.Pool, table string) (*Job, error
 func reschedule(
 	ctx context.Context, pool *pgxpool.Pool, table string,
 	id int64, dedupKey string, payload []byte,
-	delay time.Duration, maxAttempts int,
+	prevAttempts int, delay time.Duration, maxAttempts int,
 ) (dropped bool, err error) {
-	var attempts int
-	qErr := pool.QueryRow(ctx,
-		`SELECT attempts FROM `+table+` WHERE dedup_key = $1`,
-		dedupKey,
-	).Scan(&attempts)
-	if isNoRows(qErr) {
-		return true, nil //nolint:nilnil // row already gone, treat as dropped
-	}
-	if qErr != nil {
-		return false, errors.Wrapf(qErr, "reschedule %s: read attempts", table)
-	}
-
-	newAttempts := attempts + 1
+	// prevAttempts comes from Job.Attempts at dequeue time.
+	// We do not re-read from DB because Dequeue already deleted the row.
+	newAttempts := prevAttempts + 1
 	if maxAttempts > 0 && newAttempts >= maxAttempts {
 		_, err = pool.Exec(ctx,
 			`DELETE FROM `+table+` WHERE dedup_key = $1`,
