@@ -1,11 +1,14 @@
-FROM postgres:16-alpine
+FROM postgres:16
 
-# Install pg_cron from Alpine's edge/testing repository.
-RUN apk add --no-cache \
-        --repository=https://dl-cdn.alpinelinux.org/alpine/edge/testing \
-        pg_cron \
- # pg_cron must be loaded at startup and should run jobs in our database.
- && echo "shared_preload_libraries = 'pg_cron'" \
-        >> /usr/local/share/postgresql/postgresql.conf.sample \
+# Install pg_cron from the official PostgreSQL apt repository.
+# The pgdg apt source is already configured in the base image.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-16-cron \
+ && rm -rf /var/lib/apt/lists/*
+
+# pg_cron must be listed in shared_preload_libraries and should run
+# jobs in the application database (not the default 'postgres' db).
+RUN echo "shared_preload_libraries = 'pg_cron'" \
+        >> /usr/share/postgresql/postgresql.conf.sample \
  && echo "cron.database_name = 'merge_with_label'" \
-        >> /usr/local/share/postgresql/postgresql.conf.sample
+        >> /usr/share/postgresql/postgresql.conf.sample
