@@ -1,11 +1,11 @@
 [tools]
-go = "1.22.5"
+go = "1.24.5"
 golangci-lint = "2.12.2"
 goreleaser = "2.16.0"
 
 [tasks.build]
-description = "Build the merge-with-label binary"
-run = "go build -o merge-with-label ./cmd/..."
+description = "Build the merge-with-label binaries"
+run = "go build -o ./dist/ ./cmd/..."
 
 [tasks.lint]
 description = "Run golangci-lint"
@@ -21,4 +21,4 @@ run = "goreleaser release --snapshot --clean"
 
 [tasks.clean]
 description = "Remove build artifacts"
-run = "rm -rf merge-with-label dist coverage.out"
+run = "rm -rf dist coverage.out"
