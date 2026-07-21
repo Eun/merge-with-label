@@ -47,8 +47,8 @@ CREATE TABLE IF NOT EXISTS mwl_pr_state (
 SELECT cron.schedule_in_database(
     'mwl_kv_cleanup',
     '0 3 * * *',
-    current_database(),
-    'DELETE FROM mwl_kv WHERE expires_at IS NOT NULL AND expires_at <= NOW()'
+    'DELETE FROM mwl_kv WHERE expires_at IS NOT NULL AND expires_at <= NOW()',
+    current_database()
 );
 
 -- +goose Down
