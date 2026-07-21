@@ -5,8 +5,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -21,11 +21,12 @@ import (
 
 func postgresDockerfilePath(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	// os.Getwd() returns the package directory during go test.
+	wd, wdErr := os.Getwd()
+	if wdErr != nil {
+		t.Fatalf("os.Getwd: %v", wdErr)
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "docker", "postgres")
+	return filepath.Join(wd, "..", "..", "..", "..", "..", "docker", "postgres")
 }
 
 // newTestHandler creates a Handler backed by a live Postgres+pg_cron container.

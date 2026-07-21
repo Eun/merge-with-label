@@ -52,7 +52,8 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 		if err != nil {
 			return errors.Wrap(err, "error creating check run")
 		}
-		if err := worker.Store.KVSet(ctx, kvBucketCheckRuns, key, []byte(checkRunID), 10*time.Minute); err != nil { //nolint:mnd // 10 min TTL for check run IDs
+		const checkRunTTL = 10 * time.Minute //nolint:mnd // 10-minute TTL for check run ID cache
+		if err := worker.Store.KVSet(ctx, kvBucketCheckRuns, key, []byte(checkRunID), checkRunTTL); err != nil {
 			return errors.Wrap(err, "unable to store check_run_id in store")
 		}
 		return nil
@@ -72,7 +73,8 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 	if err != nil {
 		return errors.Wrap(err, "error updating check run")
 	}
-	if err := worker.Store.KVSet(ctx, kvBucketCheckRuns, key, []byte(checkRunID), 10*time.Minute); err != nil { //nolint:mnd // 10 min TTL for check run IDs
+	const checkRunTTL = 10 * time.Minute //nolint:mnd // 10-minute TTL for check run ID cache
+	if err := worker.Store.KVSet(ctx, kvBucketCheckRuns, key, []byte(checkRunID), checkRunTTL); err != nil {
 		return errors.Wrap(err, "unable to store check_run_id in store")
 	}
 	return nil

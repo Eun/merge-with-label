@@ -3,8 +3,8 @@ package pgqueue_test
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -17,11 +17,12 @@ import (
 // postgresDockerfilePath returns the path to docker/postgres/ relative to this file.
 func postgresDockerfilePath(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller failed")
+	// os.Getwd() returns the package directory during go test.
+	wd, wdErr := os.Getwd()
+	if wdErr != nil {
+		t.Fatalf("os.Getwd: %v", wdErr)
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "docker", "postgres")
+	return filepath.Join(wd, "..", "..", "..", "..", "..", "docker", "postgres")
 }
 
 // newTestStore spins up a postgres+pg_cron container built from docker/postgres/Dockerfile
