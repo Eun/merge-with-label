@@ -9,9 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"slices"
+
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
-	"golang.org/x/exp/slices"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
@@ -56,6 +57,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if githubID == "" {
 		githubID = uuid.NewString()
 	}
+	_ = githubID // event ID available for debugging; not yet forwarded to handlers
 
 	logger := h.GetLoggerForContext(r.Context()).With().Str("event", githubEvent).Logger()
 	if logger.GetLevel() == zerolog.TraceLevel {
@@ -275,7 +277,13 @@ func (h *Handler) handleRepoEvent(ctx context.Context, logger *zerolog.Logger, w
 	h.enqueueRepoOrError(ctx, logger, w, h.repoFrom(base), base.Installation.ID)
 }
 
-func (h *Handler) enqueueRepoOrError(ctx context.Context, logger *zerolog.Logger, w http.ResponseWriter, repo *common.Repository, installationID int64) {
+func (h *Handler) enqueueRepoOrError(
+	ctx context.Context,
+	logger *zerolog.Logger,
+	w http.ResponseWriter,
+	repo *common.Repository,
+	installationID int64,
+) {
 	if err := common.EnqueueRepo(ctx, logger, h.Store, h.RateLimitInterval, &common.QueueRepoMessage{
 		BaseMessage: common.BaseMessage{InstallationID: installationID, Repository: *repo},
 	}); err != nil {

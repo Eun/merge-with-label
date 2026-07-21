@@ -25,9 +25,8 @@ var migrationsFS embed.FS
 
 // Store is the single entry-point for the Postgres queue and cache tables.
 type Store struct {
-	pool   *pgxpool.Pool
-	db     *sql.DB // stdlib wrapper used only by goose
-	dsn    string
+	pool *pgxpool.Pool
+	db   *sql.DB // stdlib wrapper used only by goose
 }
 
 // New connects to Postgres using connString and returns a ready Store.
@@ -46,7 +45,7 @@ func New(ctx context.Context, connString string) (*Store, error) {
 	// stdlib.OpenDBFromPool gives goose a *sql.DB backed by the same pool.
 	db := stdlib.OpenDBFromPool(pool)
 
-	return &Store{pool: pool, db: db, dsn: connString}, nil
+	return &Store{pool: pool, db: db}, nil
 }
 
 // Close releases all pool connections.
@@ -156,7 +155,9 @@ func (s *Store) DequeueRepo(ctx context.Context) (*Job, error) {
 
 // RescheduleRepo re-queues a failed repo job, or permanently removes it when
 // maxAttempts is reached. Returns (true, nil) when the job was dropped.
-func (s *Store) RescheduleRepo(ctx context.Context, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int) (bool, error) {
+func (s *Store) RescheduleRepo(
+	ctx context.Context, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int,
+) (bool, error) {
 	return reschedule(ctx, s.pool, "mwl_repo_queue", id, dedupKey, payload, delay, maxAttempts)
 }
 
@@ -186,7 +187,9 @@ func (s *Store) DequeuePR(ctx context.Context) (*Job, error) {
 
 // ReschedulePR re-queues a failed PR job, or permanently removes it when
 // maxAttempts is reached. Returns (true, nil) when the job was dropped.
-func (s *Store) ReschedulePR(ctx context.Context, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int) (bool, error) {
+func (s *Store) ReschedulePR(
+	ctx context.Context, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int,
+) (bool, error) {
 	return reschedule(ctx, s.pool, "mwl_pr_queue", id, dedupKey, payload, delay, maxAttempts)
 }
 
@@ -216,7 +219,11 @@ func dequeue(ctx context.Context, pool *pgxpool.Pool, table string) (*Job, error
 	return &j, nil
 }
 
-func reschedule(ctx context.Context, pool *pgxpool.Pool, table string, id int64, dedupKey string, payload []byte, delay time.Duration, maxAttempts int) (dropped bool, err error) {
+func reschedule(
+	ctx context.Context, pool *pgxpool.Pool, table string,
+	id int64, dedupKey string, payload []byte,
+	delay time.Duration, maxAttempts int,
+) (dropped bool, err error) {
 	var attempts int
 	qErr := pool.QueryRow(ctx,
 		`SELECT attempts FROM `+table+` WHERE dedup_key = $1`,

@@ -46,6 +46,10 @@ func main() {
 	if dsnEnv == "" {
 		dsnEnv = cmd.GetSetting[string](cmd.PostgresDSNSetting)
 	}
+	if dsnEnv == "" {
+		logger.Error().Msg("PostgresDSN is not set")
+		return
+	}
 
 	logger.Debug().Msg("connecting to postgres")
 	store, err := pgqueue.New(ctx, dsnEnv)

@@ -14,13 +14,13 @@ import (
 type Setting string
 
 const (
-	AllowedRepositoriesSetting          Setting = "AllowedRepositories"
-	AllowOnlyPublicRepositories         Setting = "AllowOnlyPublicRepositories"
-	BotNameSetting                      Setting = "BotName"
-	PostgresDSNSetting                  Setting = "PostgresDSN"
-	RateLimitIntervalSetting            Setting = "RateLimitInterval"
-	MessageRetryAttemptsSetting         Setting = "MessageRetryAttempts"
-	MessageRetryWaitSetting             Setting = "MessageRetryWait"
+	AllowedRepositoriesSetting             Setting = "AllowedRepositories"
+	AllowOnlyPublicRepositories            Setting = "AllowOnlyPublicRepositories"
+	BotNameSetting                         Setting = "BotName"
+	PostgresDSNSetting                     Setting = "PostgresDSN"
+	RateLimitIntervalSetting               Setting = "RateLimitInterval"
+	MessageRetryAttemptsSetting            Setting = "MessageRetryAttempts"
+	MessageRetryWaitSetting                Setting = "MessageRetryWait"
 	DurationBeforeMergeAfterCheckSetting   Setting = "DurationBeforeMergeAfterCheck"
 	DurationToWaitAfterUpdateBranchSetting Setting = "DurationToWaitAfterUpdateBranch"
 	MessageChannelSizePerSubjectSetting    Setting = "MessageChannelSizePerSubject"
@@ -28,13 +28,13 @@ const (
 )
 
 var defaultSettings = map[Setting]any{
-	AllowedRepositoriesSetting:          common.RegexSlice{common.MustNewRegexItem(".*")},
-	AllowOnlyPublicRepositories:         false,
-	BotNameSetting:                      "merge-with-label",
-	PostgresDSNSetting:                  "postgres://postgres:postgres@localhost:5432/merge_with_label?sslmode=disable",
-	RateLimitIntervalSetting:            time.Second * 30, //nolint:mnd // allow to set defaults
-	MessageRetryAttemptsSetting:         5,                //nolint:mnd // allow to set defaults
-	MessageRetryWaitSetting:             time.Second * 15, //nolint:mnd // allow to set defaults
+	AllowedRepositoriesSetting:             common.RegexSlice{common.MustNewRegexItem(".*")},
+	AllowOnlyPublicRepositories:            false,
+	BotNameSetting:                         "merge-with-label",
+	PostgresDSNSetting:                     "",               // empty: require explicit configuration via env var
+	RateLimitIntervalSetting:               time.Second * 30, //nolint:mnd // allow to set defaults
+	MessageRetryAttemptsSetting:            5,                //nolint:mnd // allow to set defaults
+	MessageRetryWaitSetting:                time.Second * 15, //nolint:mnd // allow to set defaults
 	DurationBeforeMergeAfterCheckSetting:   time.Second * 10, //nolint:mnd // allow to set defaults
 	DurationToWaitAfterUpdateBranchSetting: time.Second * 30, //nolint:mnd // allow to set defaults
 	MessageChannelSizePerSubjectSetting:    64,               //nolint:mnd // allow to set defaults

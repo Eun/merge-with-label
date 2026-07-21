@@ -57,7 +57,7 @@ func EnqueuePR(
 	return nil
 }
 
-// prepareEnqueue serialises msg and computes the rate-limit delay.
+// prepareEnqueue serializes msg and computes the rate-limit delay.
 func prepareEnqueue(
 	ctx context.Context,
 	store *pgqueue.Store,

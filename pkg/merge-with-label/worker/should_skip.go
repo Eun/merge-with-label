@@ -9,7 +9,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
-	"golang.org/x/exp/slices"
+	"slices"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
