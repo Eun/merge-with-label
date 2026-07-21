@@ -115,8 +115,8 @@ func main() {
 		Addr:              address,
 		ReadTimeout:       1 * time.Second,
 		WriteTimeout:      1 * time.Second,
-		IdleTimeout:       30 * time.Second, //nolint:gomnd // set IdleTimeout
-		ReadHeaderTimeout: 2 * time.Second,  //nolint:gomnd // set ReadHeaderTimeout
+		IdleTimeout:       30 * time.Second, //nolint:mnd // set IdleTimeout
+		ReadHeaderTimeout: 2 * time.Second,  //nolint:mnd // set ReadHeaderTimeout
 		Handler: &server.Handler{
 			GetLoggerForContext: func(ctx context.Context) *zerolog.Logger {
 				return &logger
