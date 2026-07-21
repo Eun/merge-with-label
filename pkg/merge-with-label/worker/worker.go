@@ -3,11 +3,9 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
@@ -21,6 +19,7 @@ import (
 // queue is empty.
 const pollInterval = 500 * time.Millisecond
 
+// Worker processes jobs from the two queue lanes (repo and pull_request).
 type Worker struct {
 	Logger  *zerolog.Logger
 	BotName string
@@ -30,10 +29,9 @@ type Worker struct {
 
 	Store *pgqueue.Store
 
-	PullRequestSubject string // kept for re-enqueue calls
-	RetryWait          time.Duration
+	RetryWait time.Duration
 
-	MaxDurationForPushWorker        time.Duration
+	MaxDurationForRepoWorker        time.Duration
 	MaxDurationForPullRequestWorker time.Duration
 
 	RateLimitInterval time.Duration
@@ -54,17 +52,18 @@ type pushBackError struct {
 	delay time.Duration
 }
 
-func (e pushBackError) Error() string {
-	return ""
-}
+func (e pushBackError) Error() string { return "" }
 
-// Consume starts polling all three queues concurrently until the context is
+// Consume starts polling both queue lanes concurrently until the context is
 // cancelled or Shutdown is called.
 func (w *Worker) Consume() error {
 	w.closeCh = make(chan struct{})
-	errChan := make(chan error, 3) //nolint:mnd // 3 queue types
+	errChan := make(chan error, 2) //nolint:mnd // 2 queue types
 
-	startPoller := func(msgType string, fn func(*zerolog.Logger, []byte) (string, []byte, error)) {
+	repoMsgWorker := &repoWorker{Worker: w}
+	prMsgWorker := &pullRequestWorker{Worker: w}
+
+	startPoller := func(msgType string, handle func(*zerolog.Logger, []byte) (string, []byte, error)) {
 		go func() {
 			for {
 				select {
@@ -82,7 +81,7 @@ func (w *Worker) Consume() error {
 					continue
 				}
 				w.Logger.Debug().Str("msg_type", msgType).Int64("job_id", job.ID).Msg("job dequeued")
-				dedupKey, payload, handleErr := fn(w.Logger, job.Payload)
+				dedupKey, payload, handleErr := handle(w.Logger, job.Payload)
 				if handleErr != nil {
 					var pbErr pushBackError
 					delay := w.RetryWait
@@ -92,12 +91,7 @@ func (w *Worker) Consume() error {
 						w.Logger.Error().Err(handleErr).Str("msg_type", msgType).Msg("job failed")
 					}
 					if reschedErr := w.Store.Reschedule(
-						context.Background(),
-						job.ID,
-						msgType,
-						dedupKey,
-						payload,
-						delay,
+						context.Background(), job.ID, msgType, dedupKey, payload, delay,
 					); reschedErr != nil {
 						w.Logger.Error().Err(reschedErr).Msg("unable to reschedule job")
 					}
@@ -106,44 +100,28 @@ func (w *Worker) Consume() error {
 		}()
 	}
 
-	pushMsgWorker := pushWorker{Worker: w}
-	statusMsgWorker := statusWorker{Worker: w}
-	pullRequestMsgWorker := pullRequestWorker{Worker: w}
-
-	startPoller(common.MsgTypePush, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
-		var m common.QueuePushMessage
+	startPoller(common.MsgTypeRepo, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+		var m common.QueueRepoMessage
 		if err := json.Unmarshal(payload, &m); err != nil {
-			return "", payload, errors.Wrap(err, "unmarshal push message")
+			return "", payload, errors.Wrap(err, "unmarshal repo message")
 		}
-		dedupKey := fmt.Sprintf("push.%d.%s", m.InstallationID, m.Repository.NodeID)
+		dedupKey := common.RepoDedupKey(m.Repository.NodeID)
 		if !w.isAllowed(logger, &m) {
 			return dedupKey, payload, nil
 		}
-		return dedupKey, payload, pushMsgWorker.runLogic(logger, &m)
+		return dedupKey, payload, repoMsgWorker.runLogic(logger, &m)
 	})
 
-	startPoller(common.MsgTypeStatus, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
-		var m common.QueueStatusMessage
+	startPoller(common.MsgTypePR, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+		var m common.QueuePRMessage
 		if err := json.Unmarshal(payload, &m); err != nil {
-			return "", payload, errors.Wrap(err, "unmarshal status message")
+			return "", payload, errors.Wrap(err, "unmarshal PR message")
 		}
-		dedupKey := fmt.Sprintf("status.%d.%s", m.InstallationID, m.Repository.NodeID)
+		dedupKey := common.PRDedupKey(m.Repository.NodeID, m.PullRequest.Number)
 		if !w.isAllowed(logger, &m) {
 			return dedupKey, payload, nil
 		}
-		return dedupKey, payload, statusMsgWorker.runLogic(logger, &m)
-	})
-
-	startPoller(common.MsgTypePullRequest, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
-		var m common.QueuePullRequestMessage
-		if err := json.Unmarshal(payload, &m); err != nil {
-			return "", payload, errors.Wrap(err, "unmarshal pull_request message")
-		}
-		dedupKey := fmt.Sprintf("pull_request.%d.%s.%d", m.InstallationID, m.Repository.NodeID, m.PullRequest.Number)
-		if !w.isAllowed(logger, &m) {
-			return dedupKey, payload, nil
-		}
-		return dedupKey, payload, pullRequestMsgWorker.runLogic(logger, &m)
+		return dedupKey, payload, prMsgWorker.runLogic(logger, &m)
 	})
 
 	select {
@@ -173,9 +151,10 @@ func (w *Worker) isAllowed(logger *zerolog.Logger, m common.Message) bool {
 	return true
 }
 
-func (w *Worker) workOnAllPullRequests(ctx context.Context,
-	rootLogger *zerolog.Logger,
-	sess *session) error {
+// fanOutPRs finds all eligible open PRs for a repo and enqueues a PR job for
+// each one. Because EnqueuePR uses ON CONFLICT DO NOTHING, a PR that is
+// already in the queue will not produce a duplicate row.
+func (w *Worker) fanOutPRs(ctx context.Context, rootLogger *zerolog.Logger, sess *session) error {
 	pullRequests, err := github.GetPullRequestsThatAreOpenAndHaveOneOfTheseLabels(
 		ctx,
 		w.HTTPClient,
@@ -193,29 +172,19 @@ func (w *Worker) workOnAllPullRequests(ctx context.Context,
 
 	var result error
 	for i := range pullRequests {
-		err = common.QueueMessage(
-			ctx,
-			rootLogger,
-			w.Store,
-			w.RateLimitInterval,
-			common.MsgTypePullRequest,
-			fmt.Sprintf("pull_request.%d.%s.%d", sess.InstallationID, sess.Repository.NodeID, pullRequests[i].Number),
-			&common.QueuePullRequestMessage{
-				BaseMessage: common.BaseMessage{
-					InstallationID: sess.InstallationID,
-					Repository:     *sess.Repository,
-				},
-				PullRequest: pullRequests[i],
-			})
+		err := common.EnqueuePR(ctx, rootLogger, w.Store, w.RateLimitInterval, &common.QueuePRMessage{
+			BaseMessage: common.BaseMessage{
+				InstallationID: sess.InstallationID,
+				Repository:     *sess.Repository,
+			},
+			PullRequest: pullRequests[i],
+		})
 		if err != nil {
-			rootLogger.Error().Int64("number", pullRequests[i].Number).Err(err).
-				Msg("unable to publish pull_request to queue")
-			result = multierror.Append(result, errors.Wrap(err, "unable to publish pull_request to queue"))
-			continue
+			rootLogger.Error().Int64("number", pullRequests[i].Number).Err(err).Msg("unable to enqueue PR")
+			result = multierror.Append(result, errors.Wrap(err, "unable to enqueue PR"))
+		} else {
+			rootLogger.Debug().Int64("number", pullRequests[i].Number).Msg("enqueued PR message")
 		}
-		rootLogger.Debug().Int64("number", pullRequests[i].Number).
-			Str("_uuid", uuid.NewString()). // keep uuid import used
-			Msg("published pull_request message")
 	}
 	return result
 }

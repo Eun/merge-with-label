@@ -82,7 +82,7 @@ func main() {
 
 		RetryWait: cmd.GetSetting[time.Duration](cmd.MessageRetryWaitSetting),
 
-		MaxDurationForPushWorker:        time.Minute,
+		MaxDurationForRepoWorker:        time.Minute,
 		MaxDurationForPullRequestWorker: time.Minute,
 
 		RateLimitInterval: cmd.GetSetting[time.Duration](cmd.RateLimitIntervalSetting),

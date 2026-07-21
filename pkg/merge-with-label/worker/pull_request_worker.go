@@ -15,7 +15,7 @@ type pullRequestWorker struct {
 	*Worker
 }
 
-func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *common.QueuePullRequestMessage) error {
+func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *common.QueuePRMessage) error {
 	ctx, cancel := context.WithTimeout(context.Background(), worker.MaxDurationForPullRequestWorker)
 	defer cancel()
 	logger := rootLogger.With().
@@ -41,16 +41,17 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		logger.Debug().Msg("pull request is not open anymore")
 		return nil
 	}
-
 	if details.LastCommitTime.IsZero() || details.LastCommitSha == "" {
 		logger.Debug().Msg("pull request did not contain commits")
 		return nil
 	}
 
 	// PR-state deduplication: if we already processed this exact head SHA for
-	// this PR, skip the whole update/merge logic to avoid double-triggering.
-	// This handles the case where GitHub fires both "push" and "pull_request
-	// synchronized" for the same commit in rapid succession.
+	// this PR, skip the update/merge logic to avoid double-triggering.
+	// This is the second defence line — it catches the case where two events
+	// with different dedup keys both get dequeued before either is processed
+	// (e.g. two concurrent worker replicas, or events arriving after the first
+	// job was already consumed).
 	prState, err := worker.Store.GetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number)
 	if err != nil {
 		return errors.Wrap(err, "unable to get pr state")
@@ -62,13 +63,12 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return nil
 	}
 
-	// Record the new SHA before we do the work so that a concurrent duplicate
-	// event arriving while we process is also discarded.
+	// Record the new SHA before we do the work so a concurrent duplicate job
+	// (if it slipped past the dedup key) also discards itself.
 	if err := worker.Store.SetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha); err != nil {
 		return errors.Wrap(err, "unable to set pr state")
 	}
 
-	// update logic
 	stopLogic, didUpdatePullRequest, err := worker.updatePullRequest(ctx, &logger, sess, details)
 	if err != nil {
 		return errors.WithStack(err)
@@ -82,13 +82,7 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return pushBackError{delay: worker.DurationToWaitAfterUpdateBranch}
 	}
 
-	stopLogic, didMergePullRequest, err := worker.mergePullRequest(
-		ctx,
-		&logger,
-		sess,
-		msg.PullRequest.Number,
-		details,
-	)
+	stopLogic, didMergePullRequest, err := worker.mergePullRequest(ctx, &logger, sess, msg.PullRequest.Number, details)
 	if err != nil {
 		logger.Error().Err(err).Msg("merge pull request failed")
 		return errors.WithStack(err)
@@ -115,27 +109,16 @@ func (worker *pullRequestWorker) updatePullRequest(
 	if len(sess.Config.Update.Labels) == 0 {
 		return false, false, nil
 	}
-
 	if sess.Config.Update.Labels.ContainsOneOf(details.Labels...) == "" {
 		return false, false, nil
 	}
-
 	if details.AheadBy == 0 {
 		return false, false, nil
 	}
-
 	if details.HasConflicts {
 		rootLogger.Info().Msg("not updating: pull request has conflicts")
-		if err := worker.CreateOrUpdateCheckRun(
-			ctx,
-			rootLogger,
-			sess,
-			details.ID,
-			details.LastCommitSha,
-			"COMPLETED",
-			"not updating: pull request has conflicts",
-			"",
-		); err != nil {
+		if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+			"COMPLETED", "not updating: pull request has conflicts", ""); err != nil {
 			return false, false, errors.WithStack(err)
 		}
 		return true, false, nil
@@ -146,63 +129,30 @@ func (worker *pullRequestWorker) updatePullRequest(
 		return false, false, errors.WithStack(err)
 	}
 	if result.SkipAction {
-		if err := worker.CreateOrUpdateCheckRun(
-			ctx,
-			rootLogger,
-			sess,
-			details.ID,
-			details.LastCommitSha,
-			"COMPLETED",
-			result.Title,
-			result.Summary,
-		); err != nil {
+		if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+			"COMPLETED", result.Title, result.Summary); err != nil {
 			return false, false, errors.WithStack(err)
 		}
 		return true, false, nil
 	}
 
 	rootLogger.Info().Msg("updating pull request")
-	if err := worker.CreateOrUpdateCheckRun(
-		ctx,
-		rootLogger,
-		sess,
-		details.ID,
-		details.LastCommitSha,
-		"COMPLETED",
-		"updating",
-		"",
-	); err != nil {
+	if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+		"COMPLETED", "updating", ""); err != nil {
 		return false, false, errors.WithStack(err)
 	}
 	if err := github.UpdatePullRequest(ctx, worker.HTTPClient, sess.AccessToken, details.ID, details.LastCommitSha); err != nil {
 		var graphQLErrors github.GraphQLErrors
 		if errors.As(err, &graphQLErrors) {
-			if err := worker.CreateOrUpdateCheckRun(
-				ctx,
-				rootLogger,
-				sess,
-				details.ID,
-				details.LastCommitSha,
-				"COMPLETED",
-				"error during update",
-				graphQLErrors.GetMessages(),
-			); err != nil {
+			if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+				"COMPLETED", "error during update", graphQLErrors.GetMessages()); err != nil {
 				return false, false, errors.WithStack(err)
 			}
 		}
 		return false, false, errors.Wrap(err, "error updating pull request")
 	}
-
-	if err := worker.CreateOrUpdateCheckRun(
-		ctx,
-		rootLogger,
-		sess,
-		details.ID,
-		details.LastCommitSha,
-		"COMPLETED",
-		"updated",
-		"",
-	); err != nil {
+	if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+		"COMPLETED", "updated", ""); err != nil {
 		return false, false, errors.WithStack(err)
 	}
 	return false, true, nil
@@ -224,56 +174,27 @@ func (worker *pullRequestWorker) mergePullRequest(
 		return false, false, errors.WithStack(err)
 	}
 	if result.SkipAction {
-		if err := worker.CreateOrUpdateCheckRun(
-			ctx,
-			rootLogger,
-			sess,
-			details.ID,
-			details.LastCommitSha,
-			"COMPLETED",
-			result.Title,
-			result.Summary,
-		); err != nil {
+		if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+			"COMPLETED", result.Title, result.Summary); err != nil {
 			return false, false, errors.WithStack(err)
 		}
 		return true, false, nil
 	}
 
 	rootLogger.Info().Msg("merging pull request")
-	if err := worker.CreateOrUpdateCheckRun(
-		ctx,
-		rootLogger,
-		sess,
-		details.ID,
-		details.LastCommitSha,
-		"COMPLETED",
-		fmt.Sprintf("merging %s into %s", details.HeadRefName, details.BaseRefName),
-		"",
-	); err != nil {
+	if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+		"COMPLETED", fmt.Sprintf("merging %s into %s", details.HeadRefName, details.BaseRefName), ""); err != nil {
 		return false, false, errors.WithStack(err)
 	}
 
-	if err := github.MergePullRequest(
-		ctx,
-		worker.HTTPClient,
-		sess.AccessToken,
-		details.ID,
-		details.LastCommitSha,
+	if err := github.MergePullRequest(ctx, worker.HTTPClient, sess.AccessToken, details.ID, details.LastCommitSha,
 		sess.Config.Merge.Strategy.GithubString(),
 		fmt.Sprintf("%s (#%d)", details.Title, number),
 	); err != nil {
 		var graphQLErrors github.GraphQLErrors
 		if errors.As(err, &graphQLErrors) {
-			if err := worker.CreateOrUpdateCheckRun(
-				ctx,
-				rootLogger,
-				sess,
-				details.ID,
-				details.LastCommitSha,
-				"COMPLETED",
-				"error during merge",
-				graphQLErrors.GetMessages(),
-			); err != nil {
+			if err := worker.CreateOrUpdateCheckRun(ctx, rootLogger, sess, details.ID, details.LastCommitSha,
+				"COMPLETED", "error during merge", graphQLErrors.GetMessages()); err != nil {
 				return false, false, errors.WithStack(err)
 			}
 		}

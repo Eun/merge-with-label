@@ -11,18 +11,38 @@ import (
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
-// Queuer is the interface the server uses to enqueue messages.
-type Queuer interface {
-	Enqueue(ctx context.Context, msgType, dedupKey string, payload []byte, availableAt time.Time) error
+const kvBucketRateLimit = "rate_limit"
+
+// EnqueueRepo enqueues a repo-level work item (push, status, etc.).
+// All events for the same repo share the same dedup key so only one row
+// ever exists in the queue per repo at a time.
+func EnqueueRepo(
+	ctx context.Context,
+	logger *zerolog.Logger,
+	store *pgqueue.Store,
+	rateLimitInterval time.Duration,
+	msg *QueueRepoMessage,
+) error {
+	dedupKey := RepoDedupKey(msg.Repository.NodeID)
+	return enqueue(ctx, logger, store, rateLimitInterval, MsgTypeRepo, dedupKey, msg)
 }
 
-// QueueMessage serialises msg to JSON and enqueues it.
-// dedupKey identifies the logical "work item" — a second call with the same
-// dedupKey within the same msgType is silently dropped (ON CONFLICT DO NOTHING).
-// When rateLimitInterval > 0, a job that was already enqueued within that
-// window is delayed until the window expires so rapid consecutive GitHub events
-// for the same repo/PR collapse into a single deferred execution.
-func QueueMessage(
+// EnqueuePR enqueues a PR-level work item.
+// All events targeting the same PR (pull_request, pull_request_review,
+// check_run, push/status fan-out) share the same dedup key so only one row
+// ever exists in the queue per PR at a time.
+func EnqueuePR(
+	ctx context.Context,
+	logger *zerolog.Logger,
+	store *pgqueue.Store,
+	rateLimitInterval time.Duration,
+	msg *QueuePRMessage,
+) error {
+	dedupKey := PRDedupKey(msg.Repository.NodeID, msg.PullRequest.Number)
+	return enqueue(ctx, logger, store, rateLimitInterval, MsgTypePR, dedupKey, msg)
+}
+
+func enqueue(
 	ctx context.Context,
 	logger *zerolog.Logger,
 	store *pgqueue.Store,
@@ -36,35 +56,25 @@ func QueueMessage(
 		return errors.Wrap(err, "unable to encode message")
 	}
 
-	// Rate-limit: check when the last job for this dedupKey was enqueued.
 	availableAt := time.Now()
 	if rateLimitInterval > 0 {
-		const kvBucket = "rate_limit"
-		lastBytes, err := store.KVGet(ctx, kvBucket, dedupKey)
+		lastBytes, err := store.KVGet(ctx, kvBucketRateLimit, dedupKey)
 		if err != nil {
 			return errors.Wrap(err, "unable to get rate limit from store")
 		}
-		if len(lastBytes) == 8 {
-			var lastUnix int64
-			lastUnix = int64(lastBytes[0]) | int64(lastBytes[1])<<8 | int64(lastBytes[2])<<16 | int64(lastBytes[3])<<24 |
-				int64(lastBytes[4])<<32 | int64(lastBytes[5])<<40 | int64(lastBytes[6])<<48 | int64(lastBytes[7])<<56
-			lastTime := time.Unix(lastUnix, 0)
-			if diff := time.Until(lastTime.Add(rateLimitInterval)); diff > 0 {
+		if len(lastBytes) == 8 { //nolint:mnd // 8 bytes for int64
+			lastUnix := int64(lastBytes[0]) | int64(lastBytes[1])<<8 | int64(lastBytes[2])<<16 | int64(lastBytes[3])<<24 | //nolint:mnd // bit shifts
+				int64(lastBytes[4])<<32 | int64(lastBytes[5])<<40 | int64(lastBytes[6])<<48 | int64(lastBytes[7])<<56 //nolint:mnd // bit shifts
+			if diff := time.Until(time.Unix(lastUnix, 0).Add(rateLimitInterval)); diff > 0 {
 				availableAt = time.Now().Add(diff)
 			}
 		}
-		// Record now as the last enqueue time.
 		now := time.Now().UTC().Unix()
 		b := make([]byte, 8) //nolint:mnd // 8 bytes for int64
-		b[0] = byte(now)
-		b[1] = byte(now >> 8)  //nolint:mnd // bit shift
-		b[2] = byte(now >> 16) //nolint:mnd // bit shift
-		b[3] = byte(now >> 24) //nolint:mnd // bit shift
-		b[4] = byte(now >> 32) //nolint:mnd // bit shift
-		b[5] = byte(now >> 40) //nolint:mnd // bit shift
-		b[6] = byte(now >> 48) //nolint:mnd // bit shift
-		b[7] = byte(now >> 56) //nolint:mnd // bit shift
-		if err := store.KVSet(ctx, kvBucket, dedupKey, b, rateLimitInterval*2); err != nil {
+		for i := range 8 {
+			b[i] = byte(now >> (i * 8)) //nolint:mnd // bit shift per byte
+		}
+		if err := store.KVSet(ctx, kvBucketRateLimit, dedupKey, b, rateLimitInterval*2); err != nil {
 			return errors.Wrap(err, "unable to store rate limit in store")
 		}
 	}
