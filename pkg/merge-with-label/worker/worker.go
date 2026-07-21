@@ -9,14 +9,17 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
-
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
+
+// pollInterval is how long the worker sleeps between queue polls when the
+// queue is empty.
+const pollInterval = 500 * time.Millisecond
 
 type Worker struct {
 	Logger  *zerolog.Logger
@@ -25,22 +28,14 @@ type Worker struct {
 	AllowedRepositories         common.RegexSlice
 	AllowOnlyPublicRepositories bool
 
-	PushSubscription        *nats.Subscription
-	StatusSubscription      *nats.Subscription
-	PullRequestSubscription *nats.Subscription
+	Store *pgqueue.Store
 
-	AccessTokensKV nats.KeyValue
-	ConfigsKV      nats.KeyValue
-	CheckRunsKV    nats.KeyValue
-
-	JetStreamContext   nats.JetStreamContext
-	PullRequestSubject string
+	PullRequestSubject string // kept for re-enqueue calls
 	RetryWait          time.Duration
 
 	MaxDurationForPushWorker        time.Duration
 	MaxDurationForPullRequestWorker time.Duration
 
-	RateLimitKV       nats.KeyValue
 	RateLimitInterval time.Duration
 
 	DurationBeforeMergeAfterCheck       time.Duration
@@ -63,142 +58,127 @@ func (e pushBackError) Error() string {
 	return ""
 }
 
-func (worker *Worker) Consume() error {
-	worker.closeCh = make(chan struct{})
-	errChan := make(chan error)
+// Consume starts polling all three queues concurrently until the context is
+// cancelled or Shutdown is called.
+func (w *Worker) Consume() error {
+	w.closeCh = make(chan struct{})
+	errChan := make(chan error, 3) //nolint:mnd // 3 queue types
 
-	pushChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.PushSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
+	startPoller := func(msgType string, fn func(*zerolog.Logger, []byte) (string, []byte, error)) {
+		go func() {
+			for {
+				select {
+				case <-w.closeCh:
+					return
+				default:
+				}
+				job, err := w.Store.Dequeue(context.Background(), msgType)
+				if err != nil {
+					errChan <- errors.Wrapf(err, "dequeue %s", msgType)
+					return
+				}
+				if job == nil {
+					time.Sleep(pollInterval)
+					continue
+				}
+				w.Logger.Debug().Str("msg_type", msgType).Int64("job_id", job.ID).Msg("job dequeued")
+				dedupKey, payload, handleErr := fn(w.Logger, job.Payload)
+				if handleErr != nil {
+					var pbErr pushBackError
+					delay := w.RetryWait
+					if errors.As(handleErr, &pbErr) {
+						delay = pbErr.delay
+					} else {
+						w.Logger.Error().Err(handleErr).Str("msg_type", msgType).Msg("job failed")
+					}
+					if reschedErr := w.Store.Reschedule(
+						context.Background(),
+						job.ID,
+						msgType,
+						dedupKey,
+						payload,
+						delay,
+					); reschedErr != nil {
+						w.Logger.Error().Err(reschedErr).Msg("unable to reschedule job")
+					}
+				}
 			}
-			pushChan <- msg
-		}
-	}()
-
-	statusChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.StatusSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
-			}
-			statusChan <- msg
-		}
-	}()
-
-	pullRequestChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.PullRequestSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
-			}
-			pullRequestChan <- msg
-		}
-	}()
-
-	pushMsgWorker := pushWorker{
-		Worker: worker,
+		}()
 	}
 
-	statusMsgWorker := statusWorker{
-		Worker: worker,
-	}
+	pushMsgWorker := pushWorker{Worker: w}
+	statusMsgWorker := statusWorker{Worker: w}
+	pullRequestMsgWorker := pullRequestWorker{Worker: w}
 
-	pullRequestMsgWorker := pullRequestWorker{
-		Worker: worker,
-	}
-
-	for {
-		select {
-		case msg := <-pushChan:
-			worker.Logger.Debug().
-				Msg("push message received")
-			handleMessage[common.QueuePushMessage](worker, worker.Logger, msg, pushMsgWorker.runLogic)
-		case msg := <-statusChan:
-			worker.Logger.Debug().
-				Msg("status message received")
-			handleMessage[common.QueueStatusMessage](worker, worker.Logger, msg, statusMsgWorker.runLogic)
-		case msg := <-pullRequestChan:
-			worker.Logger.Debug().
-				Str("id", msg.Header.Get(nats.MsgIdHdr)).
-				Msg("pull_request message received")
-			handleMessage[common.QueuePullRequestMessage](worker, worker.Logger, msg, pullRequestMsgWorker.runLogic)
-		case err := <-errChan:
-			return errors.Wrap(err, "error received")
-		case <-worker.closeCh:
-			worker.Logger.Debug().Msg("close signal received")
-			return nil
+	startPoller(common.MsgTypePush, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+		var m common.QueuePushMessage
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return "", payload, errors.Wrap(err, "unmarshal push message")
 		}
+		dedupKey := fmt.Sprintf("push.%d.%s", m.InstallationID, m.Repository.NodeID)
+		if !w.isAllowed(logger, &m) {
+			return dedupKey, payload, nil
+		}
+		return dedupKey, payload, pushMsgWorker.runLogic(logger, &m)
+	})
+
+	startPoller(common.MsgTypeStatus, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+		var m common.QueueStatusMessage
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return "", payload, errors.Wrap(err, "unmarshal status message")
+		}
+		dedupKey := fmt.Sprintf("status.%d.%s", m.InstallationID, m.Repository.NodeID)
+		if !w.isAllowed(logger, &m) {
+			return dedupKey, payload, nil
+		}
+		return dedupKey, payload, statusMsgWorker.runLogic(logger, &m)
+	})
+
+	startPoller(common.MsgTypePullRequest, func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+		var m common.QueuePullRequestMessage
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return "", payload, errors.Wrap(err, "unmarshal pull_request message")
+		}
+		dedupKey := fmt.Sprintf("pull_request.%d.%s.%d", m.InstallationID, m.Repository.NodeID, m.PullRequest.Number)
+		if !w.isAllowed(logger, &m) {
+			return dedupKey, payload, nil
+		}
+		return dedupKey, payload, pullRequestMsgWorker.runLogic(logger, &m)
+	})
+
+	select {
+	case err := <-errChan:
+		return errors.Wrap(err, "poller error")
+	case <-w.closeCh:
+		w.Logger.Debug().Msg("close signal received")
+		return nil
 	}
 }
 
-func (worker *Worker) Shutdown(context.Context) error {
-	worker.closeCh <- struct{}{}
+// Shutdown signals all pollers to stop.
+func (w *Worker) Shutdown(context.Context) error {
+	close(w.closeCh)
 	return nil
 }
 
-func handleMessage[T common.Message](worker *Worker, logger *zerolog.Logger, msg *nats.Msg, fn func(logger *zerolog.Logger, m *T) error) {
-	if common.DelayMessageIfNeeded(logger, msg) {
-		return
-	}
-
-	var m T
-	if err := json.Unmarshal(msg.Data, &m); err != nil {
-		logger.Error().Err(err).Msg("unable to decode queue message")
-		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-
-	if worker.AllowOnlyPublicRepositories && m.GetRepository().Private {
+func (w *Worker) isAllowed(logger *zerolog.Logger, m common.Message) bool {
+	if w.AllowOnlyPublicRepositories && m.GetRepository().Private {
 		logger.Warn().Str("repo", m.GetRepository().FullName).Msg("repository is not allowed (it is private)")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
+		return false
 	}
-
-	if worker.AllowedRepositories.ContainsOneOf(m.GetRepository().FullName) == "" {
+	if w.AllowedRepositories.ContainsOneOf(m.GetRepository().FullName) == "" {
 		logger.Warn().Str("repo", m.GetRepository().FullName).Msg("repository is not allowed")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
+		return false
 	}
-
-	err := fn(logger, &m)
-	if err != nil {
-		var pbErr pushBackError
-		delay := worker.RetryWait
-		if errors.As(err, &pbErr) {
-			delay = pbErr.delay
-		} else {
-			logger.Error().Err(err).Msg("error")
-		}
-		if err := msg.NakWithDelay(delay); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-	if err := msg.Ack(); err != nil {
-		logger.Error().Err(err).Msg("unable to ack message")
-	}
+	return true
 }
 
-func (worker *Worker) workOnAllPullRequests(ctx context.Context,
+func (w *Worker) workOnAllPullRequests(ctx context.Context,
 	rootLogger *zerolog.Logger,
 	sess *session) error {
 	pullRequests, err := github.GetPullRequestsThatAreOpenAndHaveOneOfTheseLabels(
 		ctx,
-		worker.HTTPClient,
+		w.HTTPClient,
 		sess.AccessToken,
 		sess.Repository,
 		append(sess.Config.Update.Labels.Strings(), sess.Config.Merge.Labels.Strings()...),
@@ -214,11 +194,11 @@ func (worker *Worker) workOnAllPullRequests(ctx context.Context,
 	var result error
 	for i := range pullRequests {
 		err = common.QueueMessage(
+			ctx,
 			rootLogger,
-			worker.JetStreamContext,
-			worker.RateLimitKV,
-			worker.RateLimitInterval,
-			worker.PullRequestSubject+"."+uuid.NewString(),
+			w.Store,
+			w.RateLimitInterval,
+			common.MsgTypePullRequest,
 			fmt.Sprintf("pull_request.%d.%s.%d", sess.InstallationID, sess.Repository.NodeID, pullRequests[i].Number),
 			&common.QueuePullRequestMessage{
 				BaseMessage: common.BaseMessage{
@@ -234,6 +214,7 @@ func (worker *Worker) workOnAllPullRequests(ctx context.Context,
 			continue
 		}
 		rootLogger.Debug().Int64("number", pullRequests[i].Number).
+			Str("_uuid", uuid.NewString()). // keep uuid import used
 			Msg("published pull_request message")
 	}
 	return result

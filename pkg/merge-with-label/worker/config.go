@@ -3,8 +3,8 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"gopkg.in/yaml.v3"
@@ -123,6 +123,8 @@ func parseConfig(buf []byte) (*ConfigV1, error) {
 	}
 }
 
+const kvBucketConfigs = "configs"
+
 func (worker *Worker) getConfig(
 	ctx context.Context,
 	rootLogger *zerolog.Logger,
@@ -131,7 +133,7 @@ func (worker *Worker) getConfig(
 	sha string,
 ) (*ConfigV1, error) {
 	if sha == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // no sha means no config
 	}
 	key := hashForKV(repository.FullName)
 	logger := rootLogger.With().
@@ -139,30 +141,28 @@ func (worker *Worker) getConfig(
 		Str("sha", sha).
 		Logger()
 
-	entry, err := worker.ConfigsKV.Get(key)
-	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
-		return nil, errors.Wrap(err, "unable to get config from kv bucket")
+	value, err := worker.Store.KVGet(ctx, kvBucketConfigs, key)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to get config from store")
 	}
-	if entry == nil || len(entry.Value()) == 0 || errors.Is(err, nats.ErrKeyNotFound) {
-		logger.Debug().
-			Str("reason", "not in cache").
-			Msg("getting latest config")
-		return worker.getLatestConfig(ctx, &logger, accessToken, repository, key, sha)
-	}
-
-	var config cachedConfig
-	if err := json.Unmarshal(entry.Value(), &config); err != nil {
-		return nil, errors.Wrap(err, "unable to decode config from kv bucket")
-	}
-	if config.SHA != sha {
+	if len(value) > 0 {
+		var config cachedConfig
+		if err := json.Unmarshal(value, &config); err != nil {
+			return nil, errors.Wrap(err, "unable to decode config from store")
+		}
+		if config.SHA == sha {
+			logger.Debug().Msg("got config from cache")
+			return config.ConfigV1, nil
+		}
 		logger.Debug().
 			Str("reason", "possible old config").
 			Msg("getting latest config")
-		return worker.getLatestConfig(ctx, &logger, accessToken, repository, key, sha)
+	} else {
+		logger.Debug().
+			Str("reason", "not in cache").
+			Msg("getting latest config")
 	}
-	logger.Debug().
-		Msg("got config from cache")
-	return config.ConfigV1, err
+	return worker.getLatestConfig(ctx, &logger, accessToken, repository, key, sha)
 }
 
 func (worker *Worker) getLatestConfig(
@@ -188,7 +188,7 @@ func (worker *Worker) getLatestConfig(
 		return nil, errors.Wrap(err, "unable to parse config")
 	}
 
-	buf, err = json.Marshal(&cachedConfig{
+	encoded, err := json.Marshal(&cachedConfig{
 		ConfigV1: cfg,
 		SHA:      sha,
 	})
@@ -196,8 +196,8 @@ func (worker *Worker) getLatestConfig(
 		return nil, errors.Wrap(err, "unable to encode config")
 	}
 	rootLogger.Debug().Msg("storing config in cache")
-	if _, err := worker.ConfigsKV.Put(key, buf); err != nil {
-		return nil, errors.Wrap(err, "unable to store access token in kv bucket")
+	if err := worker.Store.KVSet(ctx, kvBucketConfigs, key, encoded, 24*time.Hour); err != nil {
+		return nil, errors.Wrap(err, "unable to store config in store")
 	}
 	return cfg, nil
 }

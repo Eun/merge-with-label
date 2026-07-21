@@ -1,98 +1,77 @@
 package common
 
 import (
-	"crypto/md5" //nolint:gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
-	"encoding/binary"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
+// Queuer is the interface the server uses to enqueue messages.
+type Queuer interface {
+	Enqueue(ctx context.Context, msgType, dedupKey string, payload []byte, availableAt time.Time) error
+}
+
+// QueueMessage serialises msg to JSON and enqueues it.
+// dedupKey identifies the logical "work item" — a second call with the same
+// dedupKey within the same msgType is silently dropped (ON CONFLICT DO NOTHING).
+// When rateLimitInterval > 0, a job that was already enqueued within that
+// window is delayed until the window expires so rapid consecutive GitHub events
+// for the same repo/PR collapse into a single deferred execution.
 func QueueMessage(
+	ctx context.Context,
 	logger *zerolog.Logger,
-	js nats.JetStreamContext,
-	kv nats.KeyValue,
-	interval time.Duration,
-	subject,
-	msgID string,
+	store *pgqueue.Store,
+	rateLimitInterval time.Duration,
+	msgType,
+	dedupKey string,
 	msg any,
 ) error {
-	const bufSize = 8 // 64 bit
-	//nolint:gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
-	h := md5.Sum([]byte(msgID))
-	msgIDHash := hex.EncodeToString(h[:])
-	entry, err := kv.Get(msgIDHash)
-	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
-		return errors.Wrap(err, "unable to get rate limit from kv bucket")
-	}
-	if errors.Is(err, nats.ErrKeyNotFound) {
-		entry = nil
-	}
-	var lastMessageSendTime time.Time
-	if entry != nil && len(entry.Value()) != 0 {
-		lastMessageSendTime = time.Unix(int64(binary.LittleEndian.Uint64(entry.Value())), 0)
-	}
-
-	header := make(nats.Header)
-	diff := time.Until(lastMessageSendTime.Add(interval))
-	if diff > 0 {
-		// the same message was already sent in the interval
-		// add a msg id to skip duplicate message
-		// and add a header to delay the message until the interval was hit
-		header.Set(nats.MsgIdHdr, msgIDHash)
-		header.Set(DelayUntilHeader, time.Now().Add(diff).Format(time.RFC3339))
-	}
-	buf, err := json.Marshal(msg)
+	payload, err := json.Marshal(msg)
 	if err != nil {
 		return errors.Wrap(err, "unable to encode message")
 	}
 
-	_, err = js.PublishMsgAsync(&nats.Msg{
-		Subject: subject,
-		Header:  header,
-		Data:    buf,
-	})
-
-	if err != nil {
-		return errors.Wrap(err, "unable to publish message to queue")
+	// Rate-limit: check when the last job for this dedupKey was enqueued.
+	availableAt := time.Now()
+	if rateLimitInterval > 0 {
+		const kvBucket = "rate_limit"
+		lastBytes, err := store.KVGet(ctx, kvBucket, dedupKey)
+		if err != nil {
+			return errors.Wrap(err, "unable to get rate limit from store")
+		}
+		if len(lastBytes) == 8 {
+			var lastUnix int64
+			lastUnix = int64(lastBytes[0]) | int64(lastBytes[1])<<8 | int64(lastBytes[2])<<16 | int64(lastBytes[3])<<24 |
+				int64(lastBytes[4])<<32 | int64(lastBytes[5])<<40 | int64(lastBytes[6])<<48 | int64(lastBytes[7])<<56
+			lastTime := time.Unix(lastUnix, 0)
+			if diff := time.Until(lastTime.Add(rateLimitInterval)); diff > 0 {
+				availableAt = time.Now().Add(diff)
+			}
+		}
+		// Record now as the last enqueue time.
+		now := time.Now().UTC().Unix()
+		b := make([]byte, 8) //nolint:mnd // 8 bytes for int64
+		b[0] = byte(now)
+		b[1] = byte(now >> 8)  //nolint:mnd // bit shift
+		b[2] = byte(now >> 16) //nolint:mnd // bit shift
+		b[3] = byte(now >> 24) //nolint:mnd // bit shift
+		b[4] = byte(now >> 32) //nolint:mnd // bit shift
+		b[5] = byte(now >> 40) //nolint:mnd // bit shift
+		b[6] = byte(now >> 48) //nolint:mnd // bit shift
+		b[7] = byte(now >> 56) //nolint:mnd // bit shift
+		if err := store.KVSet(ctx, kvBucket, dedupKey, b, rateLimitInterval*2); err != nil {
+			return errors.Wrap(err, "unable to store rate limit in store")
+		}
 	}
-	logger.
-		Debug().
-		Msg("published message")
 
-	b := make([]byte, bufSize)
-	binary.LittleEndian.PutUint64(b, uint64(time.Now().UTC().Unix()))
-	_, err = kv.Put(msgIDHash, b)
-	if err != nil {
-		return errors.Wrap(err, "unable to store last message time in kv bucket")
+	if err := store.Enqueue(ctx, msgType, dedupKey, payload, availableAt); err != nil {
+		return errors.Wrap(err, "unable to enqueue message")
 	}
+	logger.Debug().Str("msg_type", msgType).Str("dedup_key", dedupKey).Msg("enqueued message")
 	return nil
-}
-
-func DelayMessageIfNeeded(logger *zerolog.Logger, msg *nats.Msg) bool {
-	delayUntilValue := msg.Header.Get(DelayUntilHeader)
-	if delayUntilValue == "" {
-		return false
-	}
-	delayUntil, err := time.Parse(time.RFC3339, delayUntilValue)
-	if err != nil {
-		logger.Error().Err(err).Msg("unable to parse delay until header")
-		if err := msg.Nak(); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return true
-	}
-	diff := time.Until(delayUntil)
-	if diff > 0 {
-		logger.Debug().Str("id", msg.Header.Get(nats.MsgIdHdr)).Msg("message not yet ready")
-		if err := msg.NakWithDelay(diff); err != nil {
-			logger.Error().Err(err).Msg("unable to nak delay message")
-		}
-		return true
-	}
-	return false
 }

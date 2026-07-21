@@ -2,13 +2,15 @@ package worker
 
 import (
 	"context"
+	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
+
+const kvBucketCheckRuns = "check_runs"
 
 func (worker *Worker) CreateOrUpdateCheckRun(
 	ctx context.Context,
@@ -29,13 +31,13 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 		Logger()
 
 	key := hashForKV(pullRequestNodeID + sha)
-	entry, err := worker.CheckRunsKV.Get(key)
-	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
-		return errors.Wrap(err, "unable to get check_run_id from kv bucket")
+	value, err := worker.Store.KVGet(ctx, kvBucketCheckRuns, key)
+	if err != nil {
+		return errors.Wrap(err, "unable to get check_run_id from store")
 	}
-	if entry == nil || len(entry.Value()) == 0 || errors.Is(err, nats.ErrKeyNotFound) {
-		logger.Debug().
-			Msg("creating a new check run")
+
+	if len(value) == 0 {
+		logger.Debug().Msg("creating a new check run")
 		checkRunID, err := github.CreateCheckRun(
 			ctx,
 			worker.HTTPClient,
@@ -50,8 +52,8 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 		if err != nil {
 			return errors.Wrap(err, "error creating check run")
 		}
-		if _, err := worker.CheckRunsKV.PutString(key, checkRunID); err != nil {
-			return errors.Wrap(err, "unable to store check_run_id in kv bucket")
+		if err := worker.Store.KVSet(ctx, kvBucketCheckRuns, key, []byte(checkRunID), 10*time.Minute); err != nil {
+			return errors.Wrap(err, "unable to store check_run_id in store")
 		}
 		return nil
 	}
@@ -61,7 +63,7 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 		worker.HTTPClient,
 		sess.AccessToken,
 		sess.Repository,
-		string(entry.Value()),
+		string(value),
 		status,
 		worker.BotName,
 		title,
@@ -70,8 +72,8 @@ func (worker *Worker) CreateOrUpdateCheckRun(
 	if err != nil {
 		return errors.Wrap(err, "error updating check run")
 	}
-	if _, err := worker.CheckRunsKV.PutString(key, checkRunID); err != nil {
-		return errors.Wrap(err, "unable to store check_run_id in kv bucket")
+	if err := worker.Store.KVSet(ctx, kvBucketCheckRuns, key, []byte(checkRunID), 10*time.Minute); err != nil {
+		return errors.Wrap(err, "unable to store check_run_id in store")
 	}
 	return nil
 }

@@ -1,7 +1,10 @@
 package common
 
+// MsgType constants identify the queue table's msg_type discriminator.
 const (
-	DelayUntilHeader = "DelayUntil"
+	MsgTypePush        = "push"
+	MsgTypeStatus      = "status"
+	MsgTypePullRequest = "pull_request"
 )
 
 type Repository struct {

@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
 
 	"github.com/Eun/merge-with-label/cmd"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/server"
 )
 
@@ -38,78 +38,23 @@ func main() {
 	if address == "" {
 		address = ":" + os.Getenv("PORT")
 	}
-
 	if address == ":" {
 		address = ":8000"
 	}
 
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = nats.DefaultURL
+	dsnEnv := os.Getenv("PostgresDSN")
+	if dsnEnv == "" {
+		dsnEnv = cmd.GetSetting[string](cmd.PostgresDSNSetting)
 	}
 
-	logger.Debug().Msgf("connecting to %s", natsURL)
-	nc, err := nats.Connect(natsURL)
+	logger.Debug().Msg("connecting to postgres")
+	store, err := pgqueue.New(ctx, dsnEnv)
 	if err != nil {
-		logger.Error().Str("nats_url", natsURL).Msg("unable to connect to nats")
+		logger.Error().Err(err).Msg("unable to connect to postgres")
 		return
 	}
-	defer nc.Close()
-	logger.Debug().Msgf("connected to %s", natsURL)
-
-	logger.Debug().Msg("creating jetstream context")
-	js, err := nc.JetStream()
-	if err != nil {
-		logger.Error().Str("nats_url", natsURL).Msg("unable to create jetstream context")
-		return
-	}
-
-	currentStreamConfig := &nats.StreamConfig{
-		Name: cmd.GetSetting[string](cmd.StreamNameSetting),
-		Subjects: []string{
-			cmd.GetSetting[string](cmd.PushSubjectSetting) + ".>",
-			cmd.GetSetting[string](cmd.StatusSubjectSetting) + ".>",
-			cmd.GetSetting[string](cmd.PullRequestSubjectSetting) + ".>",
-		},
-		Retention: nats.WorkQueuePolicy,
-		MaxAge:    cmd.GetSetting[time.Duration](cmd.MaxMessageAgeSetting),
-	}
-
-	logger.Debug().Msg("getting js info")
-	info, err := js.StreamInfo(currentStreamConfig.Name)
-	if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
-		logger.Error().Err(err).Str("nats_url", natsURL).Msg("unable to get stream")
-		return
-	}
-	if info != nil {
-		logger.Debug().Msg("updating js stream")
-		if _, err := js.UpdateStream(currentStreamConfig); err != nil {
-			logger.Error().Err(err).Str("nats_url", natsURL).Msg("unable to update stream")
-			return
-		}
-	} else {
-		logger.Debug().Msg("adding js stream")
-		_, err = js.AddStream(currentStreamConfig)
-		if err != nil {
-			logger.Error().Err(err).Str("nats_url", natsURL).Msg("unable to add stream")
-			return
-		}
-	}
-	logger.Debug().Msg("js stream is ready")
-
-	logger.Debug().Msg("creating ratelimit kv")
-	rateLimitKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: cmd.GetSetting[string](cmd.RateLimitBucketNameSetting),
-		TTL:    cmd.GetSetting[time.Duration](cmd.RateLimitBucketTTLSetting),
-	})
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", natsURL).
-			Msg("unable to create jetstream key value bucket for push rate limit")
-		return
-	}
-	logger.Debug().Msg("configured ratelimit kv")
+	defer store.Close()
+	logger.Debug().Msg("postgres ready")
 
 	srv := http.Server{
 		Addr:              address,
@@ -118,21 +63,16 @@ func main() {
 		IdleTimeout:       30 * time.Second, //nolint:mnd // set IdleTimeout
 		ReadHeaderTimeout: 2 * time.Second,  //nolint:mnd // set ReadHeaderTimeout
 		Handler: &server.Handler{
-			GetLoggerForContext: func(ctx context.Context) *zerolog.Logger {
+			GetLoggerForContext: func(_ context.Context) *zerolog.Logger {
 				return &logger
 			},
 			AllowedRepositories:         cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
 			AllowOnlyPublicRepositories: cmd.GetSetting[bool](cmd.AllowOnlyPublicRepositories),
 
-			JetStreamContext:   js,
-			PushSubject:        cmd.GetSetting[string](cmd.PushSubjectSetting),
-			StatusSubject:      cmd.GetSetting[string](cmd.StatusSubjectSetting),
-			PullRequestSubject: cmd.GetSetting[string](cmd.PullRequestSubjectSetting),
-
-			RateLimitKV:       rateLimitKV,
+			Store:             store,
 			RateLimitInterval: cmd.GetSetting[time.Duration](cmd.RateLimitIntervalSetting),
 		},
-		BaseContext: func(listener net.Listener) context.Context {
+		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},
 	}
@@ -148,7 +88,7 @@ func main() {
 		logger.Info().Msg("shutting down")
 		_ = srv.Shutdown(context.Background())
 	case err := <-errChan:
-		if err != nil {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error().Err(err).Msgf("unable to listen on address %s", address)
 		}
 	}

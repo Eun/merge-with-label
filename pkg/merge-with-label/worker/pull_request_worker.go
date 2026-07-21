@@ -47,6 +47,27 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return nil
 	}
 
+	// PR-state deduplication: if we already processed this exact head SHA for
+	// this PR, skip the whole update/merge logic to avoid double-triggering.
+	// This handles the case where GitHub fires both "push" and "pull_request
+	// synchronized" for the same commit in rapid succession.
+	prState, err := worker.Store.GetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number)
+	if err != nil {
+		return errors.Wrap(err, "unable to get pr state")
+	}
+	if prState != nil && prState.HeadSHA == details.LastCommitSha {
+		logger.Debug().
+			Str("sha", details.LastCommitSha).
+			Msg("pr state sha matches last seen sha, discarding duplicate event")
+		return nil
+	}
+
+	// Record the new SHA before we do the work so that a concurrent duplicate
+	// event arriving while we process is also discarded.
+	if err := worker.Store.SetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha); err != nil {
+		return errors.Wrap(err, "unable to set pr state")
+	}
+
 	// update logic
 	stopLogic, didUpdatePullRequest, err := worker.updatePullRequest(ctx, &logger, sess, details)
 	if err != nil {

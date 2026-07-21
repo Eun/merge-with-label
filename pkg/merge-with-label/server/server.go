@@ -10,11 +10,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"golang.org/x/exp/slices"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
 const maxBodyBytes = 1024 * 1024 * 16
@@ -28,12 +28,7 @@ type Handler struct {
 	AllowedRepositories         common.RegexSlice
 	AllowOnlyPublicRepositories bool
 
-	JetStreamContext   nats.JetStreamContext
-	PushSubject        string
-	StatusSubject      string
-	PullRequestSubject string
-
-	RateLimitKV       nats.KeyValue
+	Store             *pgqueue.Store
 	RateLimitInterval time.Duration
 }
 
@@ -77,19 +72,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch githubEvent {
 	case "check_run":
-		h.handleCheckRun(&logger, githubID, body, w)
+		h.handleCheckRun(r.Context(), &logger, githubID, body, w)
 		return
 	case "pull_request":
-		h.handlePullRequest(&logger, githubID, body, w)
+		h.handlePullRequest(r.Context(), &logger, githubID, body, w)
 		return
 	case "pull_request_review":
-		h.handlePullRequestReview(&logger, githubID, body, w)
+		h.handlePullRequestReview(r.Context(), &logger, githubID, body, w)
 		return
 	case "push":
-		h.handlePush(&logger, githubID, body, w)
+		h.handlePush(r.Context(), &logger, githubID, body, w)
 		return
 	case "status":
-		h.handleStatus(&logger, githubID, baseRequest, w)
+		h.handleStatus(r.Context(), &logger, githubID, baseRequest, w)
 		return
 	}
 	h.respond(w, http.StatusOK, "ok")
@@ -122,7 +117,7 @@ func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body [
 	return &req
 }
 
-func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+func (h *Handler) handleCheckRun(ctx context.Context, logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		CheckRun struct {
@@ -159,6 +154,7 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 
 	for number := range pullRequests {
 		err := h.queuePullRequestMessage(
+			ctx,
 			logger,
 			eventID,
 			&common.Repository{
@@ -180,7 +176,8 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 	}
 	h.respond(w, http.StatusOK, "ok")
 }
-func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+
+func (h *Handler) handlePullRequest(ctx context.Context, logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		PullRequest struct {
@@ -232,6 +229,7 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 	}
 
 	err := h.queuePullRequestMessage(
+		ctx,
 		logger,
 		eventID,
 		&common.Repository{
@@ -253,7 +251,7 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+func (h *Handler) handlePullRequestReview(ctx context.Context, logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		PullRequest struct {
@@ -304,6 +302,7 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 	}
 
 	err := h.queuePullRequestMessage(
+		ctx,
 		logger,
 		eventID,
 		&common.Repository{
@@ -325,7 +324,7 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+func (h *Handler) handlePush(ctx context.Context, logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		Deleted bool   `json:"deleted"`
@@ -339,25 +338,21 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 	}
 
 	if req.Deleted {
-		// no need to handle delete operations
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
 	if req.Ref != "refs/heads/"+req.Repository.DefaultBranch {
-		// no need to handle pushes that are not targeted to the master branch.
-		// pushes to branches will only be handled when there is a pull request open
-		// and if a pull request is open, github will call the pull_request synchronize event.
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
 	err := common.QueueMessage(
+		ctx,
 		logger,
-		h.JetStreamContext,
-		h.RateLimitKV,
+		h.Store,
 		h.RateLimitInterval,
-		h.PushSubject+"."+eventID,
+		common.MsgTypePush,
 		fmt.Sprintf("push.%d.%s", req.Installation.ID, req.Repository.NodeID),
 		&common.QueuePushMessage{
 			BaseMessage: common.BaseMessage{
@@ -379,13 +374,13 @@ func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
+func (h *Handler) handleStatus(ctx context.Context, logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
 	err := common.QueueMessage(
+		ctx,
 		logger,
-		h.JetStreamContext,
-		h.RateLimitKV,
+		h.Store,
 		h.RateLimitInterval,
-		h.StatusSubject+"."+eventID,
+		common.MsgTypeStatus,
 		fmt.Sprintf("status.%d.%s", baseRequest.Installation.ID, baseRequest.Repository.NodeID),
 		&common.QueueStatusMessage{
 			BaseMessage: common.BaseMessage{
@@ -408,6 +403,7 @@ func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, baseReque
 }
 
 func (h *Handler) queuePullRequestMessage(
+	ctx context.Context,
 	logger *zerolog.Logger,
 	eventID string,
 	repository *common.Repository,
@@ -415,11 +411,11 @@ func (h *Handler) queuePullRequestMessage(
 	pullRequest *common.PullRequest,
 ) error {
 	return common.QueueMessage(
+		ctx,
 		logger,
-		h.JetStreamContext,
-		h.RateLimitKV,
+		h.Store,
 		h.RateLimitInterval,
-		h.PullRequestSubject+"."+eventID,
+		common.MsgTypePullRequest,
 		fmt.Sprintf("pull_request.%d.%s.%d", installationID, repository.NodeID, pullRequest.Number),
 		&common.QueuePullRequestMessage{
 			BaseMessage: common.BaseMessage{

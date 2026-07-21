@@ -1,9 +1,14 @@
 version: '3.9'
 services:
-  nats:
-    image: nats:2.9.20
+  postgres:
+    image: postgres:16-alpine
     restart: unless-stopped
-    command: ["--js", "-user", "nats", "-pass", "425751fd-62e2-4b73-9e1b-5a9b0dafc5ad"]
+    environment:
+      POSTGRES_USER: mwl
+      POSTGRES_PASSWORD: mwl
+      POSTGRES_DB: merge_with_label
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   server:
     image: ghcr.io/eun/merge-with-label:latest
@@ -13,9 +18,9 @@ services:
       - "8000:8000"
     environment:
       PORT: 8000
-      NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+      PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
     depends_on:
-      - nats
+      - postgres
 
   worker:
     image: ghcr.io/eun/merge-with-label:latest
@@ -24,10 +29,13 @@ services:
     volumes:
       - "./private-key.pem:/private-key.pem:ro"
     environment:
-      NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+      PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
-      - server
+      - postgres
     deploy:
       replicas: 1
+
+volumes:
+  postgres_data:
