@@ -1,0 +1,24 @@
+[tools]
+go = "1.22.5"
+golangci-lint = "2.12.2"
+goreleaser = "2.16.0"
+
+[tasks.build]
+description = "Build the merge-with-label binary"
+run = "go build -o merge-with-label ./cmd/..."
+
+[tasks.lint]
+description = "Run golangci-lint"
+run = "golangci-lint run ./..."
+
+[tasks.test]
+description = "Run tests with coverage"
+run = "go test -v -count=1 -cover -coverprofile=coverage.out -covermode=atomic ./..."
+
+[tasks.release]
+description = "Run GoReleaser (snapshot)"
+run = "goreleaser release --snapshot --clean"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf merge-with-label dist coverage.out"
