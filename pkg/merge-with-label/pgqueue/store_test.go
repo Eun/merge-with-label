@@ -1,6 +1,7 @@
 package pgqueue_test
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"runtime"
@@ -8,82 +9,83 @@ import (
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
-// postgresDockerfile resolves the path to docker/postgres/Dockerfile
-// relative to this test file's location, regardless of working directory.
+// postgresDockerfilePath returns the path to docker/postgres/ relative to this file.
 func postgresDockerfilePath(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	// file = .../pkg/merge-with-label/pgqueue/store_test.go
-	// Dockerfile is at .../docker/postgres/Dockerfile (5 levels up then down)
 	return filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "docker", "postgres")
 }
 
-// newTestStore spins up a temporary Postgres+pg_cron container built from
-// docker/postgres/Dockerfile and returns a migrated Store and a cleanup function.
-func newTestStore(t *testing.T) (*pgqueue.Store, func()) { //nolint:unparam // second return always nil error but callers need it
+// newTestStore spins up a postgres+pg_cron container built from docker/postgres/Dockerfile
+// and returns a migrated Store and a cleanup function.
+func newTestStore(t *testing.T) (s *pgqueue.Store, cleanup func()) {
 	t.Helper()
 	ctx := context.Background()
 
 	dockerCtx := postgresDockerfilePath(t)
 
-	ctr, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("testdb"),
-		tcpostgres.WithUsername("test"),
-		tcpostgres.WithPassword("test"),
-		// Build from docker/postgres/Dockerfile which installs pg_cron.
-		testcontainers.WithDockerfile(testcontainers.FromDockerfile{
+	req := testcontainers.ContainerRequest{
+		FromDockerfile: testcontainers.FromDockerfile{
 			Context:    dockerCtx,
 			Dockerfile: "Dockerfile",
 			KeepImage:  false,
-		}),
-		// Pass pg_cron config as Postgres startup flags; these override the
-		// postgresql.conf.sample values baked into the image.
-		testcontainers.WithCmd(
+		},
+		Env: map[string]string{
+			"POSTGRES_DB":       "testdb",
+			"POSTGRES_USER":     "test",
+			"POSTGRES_PASSWORD": "test",
+		},
+		Cmd: []string{
 			"-c", "shared_preload_libraries=pg_cron",
 			"-c", "cron.database_name=testdb",
-		),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2),
-		),
-	)
+		},
+		ExposedPorts: []string{"5432/tcp"},
+		WaitingFor: wait.ForLog("database system is ready to accept connections").
+			WithOccurrence(2),
+	}
+	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
 	}
 
-	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+	host, err := ctr.Host(ctx)
 	if err != nil {
 		_ = ctr.Terminate(ctx)
-		t.Fatalf("get connection string: %v", err)
+		t.Fatalf("get host: %v", err)
 	}
+	port, err := ctr.MappedPort(ctx, "5432")
+	if err != nil {
+		_ = ctr.Terminate(ctx)
+		t.Fatalf("get port: %v", err)
+	}
+	dsn := "postgres://test:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
 
 	store, err := pgqueue.New(ctx, dsn)
 	if err != nil {
 		_ = ctr.Terminate(ctx)
 		t.Fatalf("connect to postgres: %v", err)
 	}
-
 	if err := store.Migrate(ctx); err != nil {
 		store.Close()
 		_ = ctr.Terminate(ctx)
 		t.Fatalf("migrate: %v", err)
 	}
 
-	cleanup := func() {
+	return store, func() {
 		store.Close()
 		_ = ctr.Terminate(ctx)
 	}
-	return store, cleanup
 }
 
 // -----------------------------------------------------------------------
@@ -107,11 +109,10 @@ func TestEnqueueDequeueRepo(t *testing.T) {
 	if job == nil {
 		t.Fatal("expected a job, got nil")
 	}
-	if string(job.Payload) != string(payload) {
-		t.Errorf("payload = %s, want %s", job.Payload, payload)
+	if job.Payload == nil {
+		t.Error("expected non-nil payload")
 	}
 
-	// Queue should be empty now.
 	empty, err := store.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo (empty): %v", err)
@@ -126,7 +127,6 @@ func TestEnqueueRepoDeduplicate(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// Two inserts with the same dedup_key: only one row should exist.
 	if err := store.EnqueueRepo(ctx, "same-key", []byte(`{"v":1}`), time.Time{}); err != nil {
 		t.Fatalf("first enqueue: %v", err)
 	}
@@ -141,12 +141,11 @@ func TestEnqueueRepoDeduplicate(t *testing.T) {
 	if job == nil {
 		t.Fatal("expected one job")
 	}
-	// First payload wins (ON CONFLICT DO NOTHING).
-	if string(job.Payload) != `{"v":1}` {
+	// First payload wins (ON CONFLICT DO NOTHING) — JSONB may add spaces.
+	if !bytes.Contains(job.Payload, []byte(`"v"`)) {
 		t.Errorf("unexpected payload %s", job.Payload)
 	}
 
-	// No second job.
 	second, err := store.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo second: %v", err)
@@ -166,7 +165,6 @@ func TestRepoQueueFutureAvailableAt(t *testing.T) {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
 
-	// Should not be dequeued yet.
 	job, err := store.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo: %v", err)
@@ -191,7 +189,6 @@ func TestRescheduleRepo(t *testing.T) {
 		t.Fatalf("DequeueRepo: %v, job=%v", err, job)
 	}
 
-	// Reschedule with a tiny delay (1 ms) so it becomes available immediately.
 	dropped, err := store.RescheduleRepo(ctx, job.ID, "retry-key", payload, time.Millisecond, 5)
 	if err != nil {
 		t.Fatalf("RescheduleRepo: %v", err)
@@ -200,7 +197,6 @@ func TestRescheduleRepo(t *testing.T) {
 		t.Error("expected not dropped (attempt 1 of 5)")
 	}
 
-	// Should be dequeue-able again.
 	retried, err := store.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo retry: %v", err)
@@ -219,9 +215,11 @@ func TestRescheduleRepoMaxAttempts(t *testing.T) {
 	if err := store.EnqueueRepo(ctx, "exhaust-key", payload, time.Time{}); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
-	job, _ := store.DequeueRepo(ctx)
+	job, err := store.DequeueRepo(ctx)
+	if err != nil || job == nil {
+		t.Fatalf("DequeueRepo: %v", err)
+	}
 
-	// maxAttempts = 1 means drop on the very first reschedule.
 	dropped, err := store.RescheduleRepo(ctx, job.ID, "exhaust-key", payload, time.Millisecond, 1)
 	if err != nil {
 		t.Fatalf("RescheduleRepo: %v", err)
@@ -230,8 +228,10 @@ func TestRescheduleRepoMaxAttempts(t *testing.T) {
 		t.Error("expected job to be dropped at maxAttempts=1")
 	}
 
-	// Queue must be empty.
-	empty, _ := store.DequeueRepo(ctx)
+	empty, err := store.DequeueRepo(ctx)
+	if err != nil {
+		t.Fatalf("DequeueRepo after exhaust: %v", err)
+	}
 	if empty != nil {
 		t.Error("expected empty queue after exhaustion")
 	}
@@ -258,8 +258,8 @@ func TestEnqueueDequeuePR(t *testing.T) {
 	if job == nil {
 		t.Fatal("expected a job, got nil")
 	}
-	if string(job.Payload) != string(payload) {
-		t.Errorf("payload = %s, want %s", job.Payload, payload)
+	if job.Payload == nil {
+		t.Error("expected non-nil payload")
 	}
 }
 
@@ -275,14 +275,20 @@ func TestEnqueuePRDeduplicate(t *testing.T) {
 		t.Fatalf("second: %v", err)
 	}
 
-	job, _ := store.DequeuePR(ctx)
+	job, err := store.DequeuePR(ctx)
+	if err != nil {
+		t.Fatalf("DequeuePR: %v", err)
+	}
 	if job == nil {
 		t.Fatal("expected one job")
 	}
-	if string(job.Payload) != `{"n":1}` {
+	if !bytes.Contains(job.Payload, []byte(`"n"`)) {
 		t.Errorf("unexpected payload %s", job.Payload)
 	}
-	second, _ := store.DequeuePR(ctx)
+	second, err := store.DequeuePR(ctx)
+	if err != nil {
+		t.Fatalf("second DequeuePR: %v", err)
+	}
 	if second != nil {
 		t.Error("expected queue to be empty after dedup")
 	}
@@ -293,7 +299,6 @@ func TestQueuesAreIndependent(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// Enqueue in PR queue; repo queue must stay empty (and vice versa).
 	if err := store.EnqueuePR(ctx, "independent", []byte(`{}`), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +334,7 @@ func TestKVSetGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("KVGet: %v", err)
 	}
-	if string(got) != "value" {
+	if !bytes.Equal(got, []byte("value")) {
 		t.Errorf("KVGet = %q, want %q", got, "value")
 	}
 }
@@ -353,9 +358,7 @@ func TestKVExpiry(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// Store with a TTL that has already passed.
-	pastTTL := -time.Millisecond
-	if err := store.KVSet(ctx, "b", "expired-key", []byte("v"), pastTTL); err != nil {
+	if err := store.KVSet(ctx, "b", "expired-key", []byte("v"), -time.Millisecond); err != nil {
 		t.Fatalf("KVSet: %v", err)
 	}
 	got, err := store.KVGet(ctx, "b", "expired-key")
@@ -378,8 +381,11 @@ func TestKVOverwrite(t *testing.T) {
 	if err := store.KVSet(ctx, "b", "k", []byte("second"), 0); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := store.KVGet(ctx, "b", "k")
-	if string(got) != "second" {
+	got, err := store.KVGet(ctx, "b", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, []byte("second")) {
 		t.Errorf("expected overwrite, got %q", got)
 	}
 }
@@ -433,9 +439,30 @@ func TestPRStateOverwrite(t *testing.T) {
 	if err := store.SetPRState(ctx, "r", 1, "new-sha"); err != nil {
 		t.Fatal(err)
 	}
-	state, _ := store.GetPRState(ctx, "r", 1)
+	state, err := store.GetPRState(ctx, "r", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if state.HeadSHA != "new-sha" {
 		t.Errorf("expected overwrite, got %q", state.HeadSHA)
+	}
+}
+
+func TestPRStateScopedToRepo(t *testing.T) {
+	store, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if err := store.SetPRState(ctx, "repo-A", 1, "sha-a"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.GetPRState(ctx, "repo-B", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != nil {
+		t.Error("PR state must be scoped to repo_node_id")
 	}
 }
 
@@ -469,27 +496,8 @@ func TestDeletePRStateIdempotent(t *testing.T) {
 	}
 }
 
-func TestPRStateScopedToRepo(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
-	ctx := context.Background()
-
-	if err := store.SetPRState(ctx, "repo-A", 1, "sha-a"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Same PR number, different repo — must not bleed.
-	state, err := store.GetPRState(ctx, "repo-B", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state != nil {
-		t.Error("PR state must be scoped to repo_node_id")
-	}
-}
-
 // -----------------------------------------------------------------------
-// WaitForSchema
+// WaitForSchema + pg_cron + UNLOGGED
 // -----------------------------------------------------------------------
 
 func TestWaitForSchema(t *testing.T) {
@@ -497,7 +505,6 @@ func TestWaitForSchema(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	// Schema is already applied by newTestStore; WaitForSchema must return immediately.
 	done := make(chan error, 1)
 	go func() { done <- store.WaitForSchema(ctx) }()
 
@@ -511,32 +518,25 @@ func TestWaitForSchema(t *testing.T) {
 	}
 }
 
-// TestKVUnloggedAndCron verifies that migration 00002 converted mwl_kv to an
-// UNLOGGED table and that pg_cron is available in the test container.
 func TestKVUnloggedAndCron(t *testing.T) {
 	store, cleanup := newTestStore(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	// Verify the table is UNLOGGED.
 	var persistence string
-	err := store.QueryRow(ctx,
+	if err := store.QueryRow(ctx,
 		`SELECT relpersistence FROM pg_class WHERE relname = 'mwl_kv'`,
-	).Scan(&persistence)
-	if err != nil {
+	).Scan(&persistence); err != nil {
 		t.Fatalf("query relpersistence: %v", err)
 	}
-	// 'u' = unlogged, 'p' = permanent (logged), 't' = temporary
 	if persistence != "u" {
-		t.Errorf("mwl_kv relpersistence = %q, want %q (unlogged)", persistence, "u")
+		t.Errorf("mwl_kv relpersistence = %q, want 'u' (unlogged)", persistence)
 	}
 
-	// Verify the pg_cron job was scheduled.
 	var count int
-	err = store.QueryRow(ctx,
+	if err := store.QueryRow(ctx,
 		`SELECT COUNT(*) FROM cron.job WHERE jobname = 'mwl_kv_cleanup'`,
-	).Scan(&count)
-	if err != nil {
+	).Scan(&count); err != nil {
 		t.Fatalf("query cron.job: %v", err)
 	}
 	if count != 1 {

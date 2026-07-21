@@ -345,8 +345,8 @@ func (s *Store) SetPRState(ctx context.Context, repoNodeID string, prNumber int6
 
 // QueryRow executes a query that returns at most one row.
 // Exposed for testing and operational queries (e.g. checking migration state).
-func (s *Store) QueryRow(ctx context.Context, sql string, args ...any) pgxRow {
-	return s.pool.QueryRow(ctx, sql, args...)
+func (s *Store) QueryRow(ctx context.Context, query string, args ...any) pgxRow {
+	return s.pool.QueryRow(ctx, query, args...)
 }
 
 type pgxRow interface {
