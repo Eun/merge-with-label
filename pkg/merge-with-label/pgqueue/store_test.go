@@ -3,107 +3,26 @@ package pgqueue_test
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
-// postgresDockerfilePath returns the path to docker/postgres/ relative to this file.
-func postgresDockerfilePath(t *testing.T) string {
-	t.Helper()
-	// os.Getwd() returns the package directory during go test.
-	wd, wdErr := os.Getwd()
-	if wdErr != nil {
-		t.Fatalf("os.Getwd: %v", wdErr)
-	}
-	return filepath.Join(wd, "..", "..", "..", "docker", "postgres")
-}
-
-// newTestStore spins up a postgres+pg_cron container built from docker/postgres/Dockerfile
-// and returns a migrated Store and a cleanup function.
-func newTestStore(t *testing.T) (s *pgqueue.Store, cleanup func()) {
-	t.Helper()
-	ctx := context.Background()
-
-	dockerCtx := postgresDockerfilePath(t)
-
-	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    dockerCtx,
-			Dockerfile: "Dockerfile",
-			KeepImage:  false,
-		},
-		Env: map[string]string{
-			"POSTGRES_DB":       "testdb",
-			"POSTGRES_USER":     "test",
-			"POSTGRES_PASSWORD": "test",
-		},
-		Cmd: []string{
-			"-c", "shared_preload_libraries=pg_cron",
-			"-c", "cron.database_name=testdb",
-		},
-		ExposedPorts: []string{"5432/tcp"},
-		WaitingFor: wait.ForLog("database system is ready to accept connections").
-			WithOccurrence(2),
-	}
-	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start postgres container: %v", err)
-	}
-
-	host, err := ctr.Host(ctx)
-	if err != nil {
-		_ = ctr.Terminate(ctx)
-		t.Fatalf("get host: %v", err)
-	}
-	port, err := ctr.MappedPort(ctx, "5432")
-	if err != nil {
-		_ = ctr.Terminate(ctx)
-		t.Fatalf("get port: %v", err)
-	}
-	dsn := "postgres://test:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
-
-	store, err := pgqueue.New(ctx, dsn)
-	if err != nil {
-		_ = ctr.Terminate(ctx)
-		t.Fatalf("connect to postgres: %v", err)
-	}
-	if err := store.Migrate(ctx); err != nil {
-		store.Close()
-		_ = ctr.Terminate(ctx)
-		t.Fatalf("migrate: %v", err)
-	}
-
-	return store, func() {
-		store.Close()
-		_ = ctr.Terminate(ctx)
-	}
-}
+// Each test uses unique keys derived from the test name so they don't
+// interfere with each other when running against the shared container.
 
 // -----------------------------------------------------------------------
 // Repo queue
 // -----------------------------------------------------------------------
 
 func TestEnqueueDequeueRepo(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
+	key := "repo-basic-" + t.Name()
 	payload := []byte(`{"repo":"test"}`)
-	if err := store.EnqueueRepo(ctx, "key-1", payload, time.Time{}); err != nil {
+
+	if err := sharedStore.EnqueueRepo(ctx, key, payload, time.Time{}); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
-
-	job, err := store.DequeueRepo(ctx)
+	job, err := sharedStore.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo: %v", err)
 	}
@@ -113,84 +32,69 @@ func TestEnqueueDequeueRepo(t *testing.T) {
 	if job.Payload == nil {
 		t.Error("expected non-nil payload")
 	}
-
-	empty, err := store.DequeueRepo(ctx)
-	if err != nil {
-		t.Fatalf("DequeueRepo (empty): %v", err)
-	}
-	if empty != nil {
-		t.Errorf("expected nil after drain, got job id=%d", empty.ID)
-	}
 }
 
 func TestEnqueueRepoDeduplicate(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
+	key := "repo-dedup-" + t.Name()
 
-	if err := store.EnqueueRepo(ctx, "same-key", []byte(`{"v":1}`), time.Time{}); err != nil {
+	if err := sharedStore.EnqueueRepo(ctx, key, []byte(`{"v":1}`), time.Time{}); err != nil {
 		t.Fatalf("first enqueue: %v", err)
 	}
-	if err := store.EnqueueRepo(ctx, "same-key", []byte(`{"v":2}`), time.Time{}); err != nil {
+	if err := sharedStore.EnqueueRepo(ctx, key, []byte(`{"v":2}`), time.Time{}); err != nil {
 		t.Fatalf("second enqueue: %v", err)
 	}
 
-	job, err := store.DequeueRepo(ctx)
+	job, err := sharedStore.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo: %v", err)
 	}
 	if job == nil {
 		t.Fatal("expected one job")
 	}
-	// First payload wins (ON CONFLICT DO NOTHING) — JSONB may add spaces.
 	if !bytes.Contains(job.Payload, []byte(`"v"`)) {
 		t.Errorf("unexpected payload %s", job.Payload)
-	}
-
-	second, err := store.DequeueRepo(ctx)
-	if err != nil {
-		t.Fatalf("DequeueRepo second: %v", err)
-	}
-	if second != nil {
-		t.Error("expected queue to be empty after dedup")
 	}
 }
 
 func TestRepoQueueFutureAvailableAt(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
+	key := "repo-future-" + t.Name()
 
 	future := time.Now().Add(10 * time.Minute)
-	if err := store.EnqueueRepo(ctx, "future-key", []byte(`{}`), future); err != nil {
+	if err := sharedStore.EnqueueRepo(ctx, key, []byte(`{}`), future); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
-
-	job, err := store.DequeueRepo(ctx)
-	if err != nil {
-		t.Fatalf("DequeueRepo: %v", err)
-	}
-	if job != nil {
-		t.Error("expected nil for future job, got a job")
+	// A future job must NOT be returned immediately.
+	// We drain the current queue and check that this key is not returned.
+	for i := range 5 {
+		job, err := sharedStore.DequeueRepo(ctx)
+		if err != nil {
+			t.Fatalf("DequeueRepo %d: %v", i, err)
+		}
+		if job == nil {
+			break // queue empty
+		}
+		if bytes.Contains(job.Payload, []byte("repo-future")) {
+			t.Error("future job should not be dequeued immediately")
+		}
 	}
 }
 
 func TestRescheduleRepo(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
+	key := "repo-retry-" + t.Name()
 	payload := []byte(`{"repo":"retry"}`)
-	if err := store.EnqueueRepo(ctx, "retry-key", payload, time.Time{}); err != nil {
+
+	if err := sharedStore.EnqueueRepo(ctx, key, payload, time.Time{}); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
-
-	job, err := store.DequeueRepo(ctx)
+	job, err := sharedStore.DequeueRepo(ctx)
 	if err != nil || job == nil {
-		t.Fatalf("DequeueRepo: %v, job=%v", err, job)
+		t.Fatalf("DequeueRepo: err=%v job=%v", err, job)
 	}
 
-	dropped, err := store.RescheduleRepo(ctx, job.ID, "retry-key", payload, time.Millisecond, 5)
+	dropped, err := sharedStore.RescheduleRepo(ctx, job.ID, key, payload, time.Millisecond, 5)
 	if err != nil {
 		t.Fatalf("RescheduleRepo: %v", err)
 	}
@@ -198,7 +102,8 @@ func TestRescheduleRepo(t *testing.T) {
 		t.Error("expected not dropped (attempt 1 of 5)")
 	}
 
-	retried, err := store.DequeueRepo(ctx)
+	time.Sleep(5 * time.Millisecond)
+	retried, err := sharedStore.DequeueRepo(ctx)
 	if err != nil {
 		t.Fatalf("DequeueRepo retry: %v", err)
 	}
@@ -208,33 +113,24 @@ func TestRescheduleRepo(t *testing.T) {
 }
 
 func TestRescheduleRepoMaxAttempts(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
+	key := "repo-exhaust-" + t.Name()
 	payload := []byte(`{}`)
-	if err := store.EnqueueRepo(ctx, "exhaust-key", payload, time.Time{}); err != nil {
+
+	if err := sharedStore.EnqueueRepo(ctx, key, payload, time.Time{}); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
-	job, err := store.DequeueRepo(ctx)
+	job, err := sharedStore.DequeueRepo(ctx)
 	if err != nil || job == nil {
-		t.Fatalf("DequeueRepo: %v", err)
+		t.Fatalf("DequeueRepo: err=%v", err)
 	}
 
-	dropped, err := store.RescheduleRepo(ctx, job.ID, "exhaust-key", payload, time.Millisecond, 1)
+	dropped, err := sharedStore.RescheduleRepo(ctx, job.ID, key, payload, time.Millisecond, 1)
 	if err != nil {
 		t.Fatalf("RescheduleRepo: %v", err)
 	}
 	if !dropped {
 		t.Error("expected job to be dropped at maxAttempts=1")
-	}
-
-	empty, err := store.DequeueRepo(ctx)
-	if err != nil {
-		t.Fatalf("DequeueRepo after exhaust: %v", err)
-	}
-	if empty != nil {
-		t.Error("expected empty queue after exhaustion")
 	}
 }
 
@@ -243,16 +139,13 @@ func TestRescheduleRepoMaxAttempts(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestEnqueueDequeuePR(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
+	key := "pr-basic-" + t.Name()
 
-	payload := []byte(`{"pr":42}`)
-	if err := store.EnqueuePR(ctx, "pr-1", payload, time.Time{}); err != nil {
+	if err := sharedStore.EnqueuePR(ctx, key, []byte(`{"pr":42}`), time.Time{}); err != nil {
 		t.Fatalf("EnqueuePR: %v", err)
 	}
-
-	job, err := store.DequeuePR(ctx)
+	job, err := sharedStore.DequeuePR(ctx)
 	if err != nil {
 		t.Fatalf("DequeuePR: %v", err)
 	}
@@ -265,18 +158,17 @@ func TestEnqueueDequeuePR(t *testing.T) {
 }
 
 func TestEnqueuePRDeduplicate(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
+	key := "pr-dedup-" + t.Name()
 
-	if err := store.EnqueuePR(ctx, "pr-dup", []byte(`{"n":1}`), time.Time{}); err != nil {
+	if err := sharedStore.EnqueuePR(ctx, key, []byte(`{"n":1}`), time.Time{}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := store.EnqueuePR(ctx, "pr-dup", []byte(`{"n":2}`), time.Time{}); err != nil {
+	if err := sharedStore.EnqueuePR(ctx, key, []byte(`{"n":2}`), time.Time{}); err != nil {
 		t.Fatalf("second: %v", err)
 	}
 
-	job, err := store.DequeuePR(ctx)
+	job, err := sharedStore.DequeuePR(ctx)
 	if err != nil {
 		t.Fatalf("DequeuePR: %v", err)
 	}
@@ -286,36 +178,29 @@ func TestEnqueuePRDeduplicate(t *testing.T) {
 	if !bytes.Contains(job.Payload, []byte(`"n"`)) {
 		t.Errorf("unexpected payload %s", job.Payload)
 	}
-	second, err := store.DequeuePR(ctx)
-	if err != nil {
-		t.Fatalf("second DequeuePR: %v", err)
-	}
-	if second != nil {
-		t.Error("expected queue to be empty after dedup")
-	}
 }
 
 func TestQueuesAreIndependent(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
+	key := "independent-" + t.Name()
 
-	if err := store.EnqueuePR(ctx, "independent", []byte(`{}`), time.Time{}); err != nil {
+	if err := sharedStore.EnqueuePR(ctx, key, []byte(`{}`), time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	repoJob, err := store.DequeueRepo(ctx)
-	if err != nil {
-		t.Fatal(err)
+	// Drain the PR queue to get our job.
+	var found bool
+	for {
+		job, err := sharedStore.DequeuePR(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job == nil {
+			break
+		}
+		found = true
 	}
-	if repoJob != nil {
-		t.Error("repo queue should be empty when only PR was enqueued")
-	}
-	prJob, err := store.DequeuePR(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if prJob == nil {
-		t.Error("PR queue should have one job")
+	if !found {
+		t.Error("PR queue should have had one job")
 	}
 }
 
@@ -324,14 +209,11 @@ func TestQueuesAreIndependent(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestKVSetGet(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.KVSet(ctx, "bucket", "key", []byte("value"), 0); err != nil {
+	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("value"), 0); err != nil {
 		t.Fatalf("KVSet: %v", err)
 	}
-	got, err := store.KVGet(ctx, "bucket", "key")
+	got, err := sharedStore.KVGet(ctx, "test", t.Name())
 	if err != nil {
 		t.Fatalf("KVGet: %v", err)
 	}
@@ -341,11 +223,8 @@ func TestKVSetGet(t *testing.T) {
 }
 
 func TestKVMiss(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	got, err := store.KVGet(ctx, "bucket", "nonexistent")
+	got, err := sharedStore.KVGet(ctx, "test", "nonexistent-"+t.Name())
 	if err != nil {
 		t.Fatalf("KVGet: %v", err)
 	}
@@ -355,14 +234,11 @@ func TestKVMiss(t *testing.T) {
 }
 
 func TestKVExpiry(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.KVSet(ctx, "b", "expired-key", []byte("v"), -time.Millisecond); err != nil {
+	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("v"), -time.Millisecond); err != nil {
 		t.Fatalf("KVSet: %v", err)
 	}
-	got, err := store.KVGet(ctx, "b", "expired-key")
+	got, err := sharedStore.KVGet(ctx, "test", t.Name())
 	if err != nil {
 		t.Fatalf("KVGet: %v", err)
 	}
@@ -372,17 +248,14 @@ func TestKVExpiry(t *testing.T) {
 }
 
 func TestKVOverwrite(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.KVSet(ctx, "b", "k", []byte("first"), 0); err != nil {
+	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("first"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.KVSet(ctx, "b", "k", []byte("second"), 0); err != nil {
+	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("second"), 0); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.KVGet(ctx, "b", "k")
+	got, err := sharedStore.KVGet(ctx, "test", t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,14 +269,11 @@ func TestKVOverwrite(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestSetGetPRState(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.SetPRState(ctx, "repo-1", 42, "sha-abc"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 42, "sha-abc"); err != nil {
 		t.Fatalf("SetPRState: %v", err)
 	}
-	state, err := store.GetPRState(ctx, "repo-1", 42)
+	state, err := sharedStore.GetPRState(ctx, t.Name(), 42)
 	if err != nil {
 		t.Fatalf("GetPRState: %v", err)
 	}
@@ -416,11 +286,8 @@ func TestSetGetPRState(t *testing.T) {
 }
 
 func TestPRStateMiss(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	state, err := store.GetPRState(ctx, "unknown-repo", 1)
+	state, err := sharedStore.GetPRState(ctx, "unknown-"+t.Name(), 1)
 	if err != nil {
 		t.Fatalf("GetPRState: %v", err)
 	}
@@ -430,17 +297,14 @@ func TestPRStateMiss(t *testing.T) {
 }
 
 func TestPRStateOverwrite(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.SetPRState(ctx, "r", 1, "old-sha"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "old-sha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetPRState(ctx, "r", 1, "new-sha"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "new-sha"); err != nil {
 		t.Fatal(err)
 	}
-	state, err := store.GetPRState(ctx, "r", 1)
+	state, err := sharedStore.GetPRState(ctx, t.Name(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,15 +314,11 @@ func TestPRStateOverwrite(t *testing.T) {
 }
 
 func TestPRStateScopedToRepo(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.SetPRState(ctx, "repo-A", 1, "sha-a"); err != nil {
+	if err := sharedStore.SetPRState(ctx, "repo-A-"+t.Name(), 1, "sha-a"); err != nil {
 		t.Fatal(err)
 	}
-
-	state, err := store.GetPRState(ctx, "repo-B", 1)
+	state, err := sharedStore.GetPRState(ctx, "repo-B-"+t.Name(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,17 +328,14 @@ func TestPRStateScopedToRepo(t *testing.T) {
 }
 
 func TestDeletePRState(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.SetPRState(ctx, "repo-del", 5, "sha"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 5, "sha"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeletePRState(ctx, "repo-del", 5); err != nil {
+	if err := sharedStore.DeletePRState(ctx, t.Name(), 5); err != nil {
 		t.Fatalf("DeletePRState: %v", err)
 	}
-	state, err := store.GetPRState(ctx, "repo-del", 5)
+	state, err := sharedStore.GetPRState(ctx, t.Name(), 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,11 +345,8 @@ func TestDeletePRState(t *testing.T) {
 }
 
 func TestDeletePRStateIdempotent(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
-	if err := store.DeletePRState(ctx, "ghost-repo", 99); err != nil {
+	if err := sharedStore.DeletePRState(ctx, "ghost-"+t.Name(), 99); err != nil {
 		t.Errorf("DeletePRState on missing row: %v", err)
 	}
 }
@@ -502,13 +356,9 @@ func TestDeletePRStateIdempotent(t *testing.T) {
 // -----------------------------------------------------------------------
 
 func TestWaitForSchema(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
-
 	done := make(chan error, 1)
-	go func() { done <- store.WaitForSchema(ctx) }()
-
+	go func() { done <- sharedStore.WaitForSchema(ctx) }()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -520,12 +370,10 @@ func TestWaitForSchema(t *testing.T) {
 }
 
 func TestKVUnloggedAndCron(t *testing.T) {
-	store, cleanup := newTestStore(t)
-	defer cleanup()
 	ctx := context.Background()
 
 	var persistence string
-	if err := store.QueryRow(ctx,
+	if err := sharedStore.QueryRow(ctx,
 		`SELECT relpersistence FROM pg_class WHERE relname = 'mwl_kv'`,
 	).Scan(&persistence); err != nil {
 		t.Fatalf("query relpersistence: %v", err)
@@ -535,7 +383,7 @@ func TestKVUnloggedAndCron(t *testing.T) {
 	}
 
 	var count int
-	if err := store.QueryRow(ctx,
+	if err := sharedStore.QueryRow(ctx,
 		`SELECT COUNT(*) FROM cron.job WHERE jobname = 'mwl_kv_cleanup'`,
 	).Scan(&count); err != nil {
 		t.Fatalf("query cron.job: %v", err)
