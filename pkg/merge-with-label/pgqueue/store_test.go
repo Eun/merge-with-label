@@ -2,26 +2,60 @@ package pgqueue_test
 
 import (
 	"context"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
-// newTestStore spins up a temporary Postgres container and returns a
-// migrated Store and a cleanup function.
-func newTestStore(t *testing.T) (*pgqueue.Store, func()) {
+// postgresDockerfile resolves the path to docker/postgres/Dockerfile
+// relative to this test file's location, regardless of working directory.
+func postgresDockerfilePath(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	// file = .../pkg/merge-with-label/pgqueue/store_test.go
+	// Dockerfile is at .../docker/postgres/Dockerfile (5 levels up then down)
+	return filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "docker", "postgres")
+}
+
+// newTestStore spins up a temporary Postgres+pg_cron container built from
+// docker/postgres/Dockerfile and returns a migrated Store and a cleanup function.
+func newTestStore(t *testing.T) (*pgqueue.Store, func()) { //nolint:unparam // second return always nil error but callers need it
 	t.Helper()
 	ctx := context.Background()
+
+	dockerCtx := postgresDockerfilePath(t)
 
 	ctr, err := tcpostgres.Run(ctx,
 		"postgres:16-alpine",
 		tcpostgres.WithDatabase("testdb"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
+		// Build from docker/postgres/Dockerfile which installs pg_cron.
+		testcontainers.WithDockerfile(testcontainers.FromDockerfile{
+			Context:    dockerCtx,
+			Dockerfile: "Dockerfile",
+			KeepImage:  false,
+		}),
+		// Pass pg_cron config as Postgres startup flags; these override the
+		// postgresql.conf.sample values baked into the image.
+		testcontainers.WithCmd(
+			"-c", "shared_preload_libraries=pg_cron",
+			"-c", "cron.database_name=testdb",
+		),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2),
+		),
 	)
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
@@ -185,7 +219,7 @@ func TestRescheduleRepoMaxAttempts(t *testing.T) {
 	if err := store.EnqueueRepo(ctx, "exhaust-key", payload, time.Time{}); err != nil {
 		t.Fatalf("EnqueueRepo: %v", err)
 	}
-	job, _ := store.DequeueRepo(ctx) //nolint:errcheck // checked below
+	job, _ := store.DequeueRepo(ctx)
 
 	// maxAttempts = 1 means drop on the very first reschedule.
 	dropped, err := store.RescheduleRepo(ctx, job.ID, "exhaust-key", payload, time.Millisecond, 1)
@@ -197,7 +231,7 @@ func TestRescheduleRepoMaxAttempts(t *testing.T) {
 	}
 
 	// Queue must be empty.
-	empty, _ := store.DequeueRepo(ctx) //nolint:errcheck
+	empty, _ := store.DequeueRepo(ctx)
 	if empty != nil {
 		t.Error("expected empty queue after exhaustion")
 	}
@@ -241,14 +275,14 @@ func TestEnqueuePRDeduplicate(t *testing.T) {
 		t.Fatalf("second: %v", err)
 	}
 
-	job, _ := store.DequeuePR(ctx) //nolint:errcheck
+	job, _ := store.DequeuePR(ctx)
 	if job == nil {
 		t.Fatal("expected one job")
 	}
 	if string(job.Payload) != `{"n":1}` {
 		t.Errorf("unexpected payload %s", job.Payload)
 	}
-	second, _ := store.DequeuePR(ctx) //nolint:errcheck
+	second, _ := store.DequeuePR(ctx)
 	if second != nil {
 		t.Error("expected queue to be empty after dedup")
 	}
@@ -344,7 +378,7 @@ func TestKVOverwrite(t *testing.T) {
 	if err := store.KVSet(ctx, "b", "k", []byte("second"), 0); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := store.KVGet(ctx, "b", "k") //nolint:errcheck
+	got, _ := store.KVGet(ctx, "b", "k")
 	if string(got) != "second" {
 		t.Errorf("expected overwrite, got %q", got)
 	}
@@ -399,7 +433,7 @@ func TestPRStateOverwrite(t *testing.T) {
 	if err := store.SetPRState(ctx, "r", 1, "new-sha"); err != nil {
 		t.Fatal(err)
 	}
-	state, _ := store.GetPRState(ctx, "r", 1) //nolint:errcheck
+	state, _ := store.GetPRState(ctx, "r", 1)
 	if state.HeadSHA != "new-sha" {
 		t.Errorf("expected overwrite, got %q", state.HeadSHA)
 	}
@@ -477,28 +511,35 @@ func TestWaitForSchema(t *testing.T) {
 	}
 }
 
-func TestKVExpiryDeletesRowLazily(t *testing.T) {
-	// After KVGet on an expired key the row must be physically gone
-	// (lazy delete-on-miss via the CTE in KVGet).
+// TestKVUnloggedAndCron verifies that migration 00002 converted mwl_kv to an
+// UNLOGGED table and that pg_cron is available in the test container.
+func TestKVUnloggedAndCron(t *testing.T) {
 	store, cleanup := newTestStore(t)
 	defer cleanup()
 	ctx := context.Background()
 
-	if err := store.KVSet(ctx, "lazy", "k", []byte("v"), -time.Millisecond); err != nil {
-		t.Fatal(err)
-	}
-	// First read triggers the lazy delete.
-	_, _ = store.KVGet(ctx, "lazy", "k") //nolint:errcheck
-
-	// Write a fresh value with no TTL.
-	if err := store.KVSet(ctx, "lazy", "k", []byte("fresh"), 0); err != nil {
-		t.Fatal(err)
-	}
-	got, err := store.KVGet(ctx, "lazy", "k")
+	// Verify the table is UNLOGGED.
+	var persistence string
+	err := store.QueryRow(ctx,
+		`SELECT relpersistence FROM pg_class WHERE relname = 'mwl_kv'`,
+	).Scan(&persistence)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("query relpersistence: %v", err)
 	}
-	if string(got) != "fresh" {
-		t.Errorf("expected fresh value after lazy delete, got %q", got)
+	// 'u' = unlogged, 'p' = permanent (logged), 't' = temporary
+	if persistence != "u" {
+		t.Errorf("mwl_kv relpersistence = %q, want %q (unlogged)", persistence, "u")
+	}
+
+	// Verify the pg_cron job was scheduled.
+	var count int
+	err = store.QueryRow(ctx,
+		`SELECT COUNT(*) FROM cron.job WHERE jobname = 'mwl_kv_cleanup'`,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query cron.job: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 cron job named mwl_kv_cleanup, got %d", count)
 	}
 }

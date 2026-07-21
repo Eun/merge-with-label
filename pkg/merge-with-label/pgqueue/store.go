@@ -260,22 +260,12 @@ func reschedule(
 // Key-value cache
 // -----------------------------------------------------------------------
 
-// KVGet retrieves a value for (bucket, key). Returns nil, nil on cache miss.
-// If the row exists but has expired it is deleted atomically by the same
-// statement — no background goroutine or external scheduler required.
+// KVGet retrieves a value for (bucket, key). Returns nil, nil on cache miss
+// or if the row has expired. Expired rows are purged nightly by the
+// pg_cron job scheduled in migration 00002.
 func (s *Store) KVGet(ctx context.Context, bucket, key string) ([]byte, error) {
 	var value []byte
-	// The CTE first tries to delete an expired row and then selects the
-	// live one. Both arms run in a single round-trip:
-	//   - expired row  → deleted by the CTE, SELECT returns nothing → cache miss
-	//   - live row     → not touched by the CTE, SELECT returns value
-	//   - absent row   → both arms are no-ops, SELECT returns nothing → cache miss
 	err := s.pool.QueryRow(ctx, `
-		WITH deleted AS (
-			DELETE FROM mwl_kv
-			WHERE bucket = $1 AND key = $2
-			  AND expires_at IS NOT NULL AND expires_at <= NOW()
-		)
 		SELECT value FROM mwl_kv
 		WHERE bucket = $1 AND key = $2
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -351,6 +341,16 @@ func (s *Store) SetPRState(ctx context.Context, repoNodeID string, prNumber int6
 		        updated_at = NOW()
 	`, repoNodeID, prNumber, headSHA)
 	return errors.Wrap(err, "set pr state")
+}
+
+// QueryRow executes a query that returns at most one row.
+// Exposed for testing and operational queries (e.g. checking migration state).
+func (s *Store) QueryRow(ctx context.Context, sql string, args ...any) pgxRow {
+	return s.pool.QueryRow(ctx, sql, args...)
+}
+
+type pgxRow interface {
+	Scan(dest ...any) error
 }
 
 func isNoRows(err error) bool {

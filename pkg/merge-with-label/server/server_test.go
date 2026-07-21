@@ -5,28 +5,55 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/server"
 )
 
-// newTestHandler creates a Handler backed by a live Postgres container.
-func newTestHandler(t *testing.T) (*server.Handler, func()) {
+func postgresDockerfilePath(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "..", "docker", "postgres")
+}
+
+// newTestHandler creates a Handler backed by a live Postgres+pg_cron container.
+func newTestHandler(t *testing.T) (*server.Handler, func()) { //nolint:unparam // consistent helper signature
 	t.Helper()
 	ctx := context.Background()
+
+	dockerCtx := postgresDockerfilePath(t)
 
 	ctr, err := tcpostgres.Run(ctx,
 		"postgres:16-alpine",
 		tcpostgres.WithDatabase("testdb"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
-		tcpostgres.BasicWaitStrategies(),
+		testcontainers.WithDockerfile(testcontainers.FromDockerfile{
+			Context:    dockerCtx,
+			Dockerfile: "Dockerfile",
+			KeepImage:  false,
+		}),
+		testcontainers.WithCmd(
+			"-c", "shared_preload_libraries=pg_cron",
+			"-c", "cron.database_name=testdb",
+		),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2),
+		),
 	)
 	if err != nil {
 		t.Fatalf("start postgres container: %v", err)
@@ -82,7 +109,7 @@ func basePayload(action, event string) []byte {
 func postEvent(t *testing.T, h *server.Handler, event string, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", event)
 	req.Header.Set("X-GitHub-Delivery", "test-delivery-id")
 	h.ServeHTTP(rec, req)
@@ -94,7 +121,7 @@ func TestServeHTTP_NonPostRedirects(t *testing.T) {
 	defer cleanup()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTemporaryRedirect {
 		t.Errorf("GET / = %d, want %d", rec.Code, http.StatusTemporaryRedirect)
@@ -106,7 +133,7 @@ func TestServeHTTP_UnknownPath(t *testing.T) {
 	defer cleanup()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/unknown", nil)
+	req := httptest.NewRequest(http.MethodPost, "/unknown", http.NoBody)
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("POST /unknown = %d, want %d", rec.Code, http.StatusNotFound)
@@ -176,7 +203,7 @@ func TestHandlePush_DeletedBranchIgnored(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("push deleted = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeueRepo(context.Background())
 	if job != nil {
 		t.Error("deleted push should not enqueue a job")
 	}
@@ -200,7 +227,7 @@ func TestHandlePush_NonDefaultBranchIgnored(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("feature branch push = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeueRepo(context.Background())
 	if job != nil {
 		t.Error("non-default branch push should not enqueue a job")
 	}
@@ -214,7 +241,7 @@ func TestHandleStatus_EnqueuesRepoJob(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("status handler = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeueRepo(context.Background())
 	if job == nil {
 		t.Error("expected repo job from status event")
 	}
@@ -238,7 +265,7 @@ func TestHandlePullRequest_OpenSynchronize_EnqueuesPR(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("pull_request = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeuePR(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeuePR(context.Background())
 	if job == nil {
 		t.Error("expected PR job from pull_request synchronize")
 	}
@@ -262,7 +289,7 @@ func TestHandlePullRequest_ClosedIgnored(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("closed PR = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeuePR(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeuePR(context.Background())
 	if job != nil {
 		t.Error("closed PR should not enqueue a job")
 	}
@@ -286,7 +313,7 @@ func TestHandlePullRequestReview_SubmittedEnqueuesPR(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("pull_request_review = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeuePR(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeuePR(context.Background())
 	if job == nil {
 		t.Error("expected PR job from pull_request_review submitted")
 	}
@@ -317,7 +344,7 @@ func TestHandleCheckRun_WithPRNumbers_EnqueuesPRJobs(t *testing.T) {
 	ctx := context.Background()
 	var count int
 	for {
-		job, _ := h.Store.DequeuePR(ctx) //nolint:errcheck
+		job, _ := h.Store.DequeuePR(ctx)
 		if job == nil {
 			break
 		}
@@ -349,7 +376,7 @@ func TestHandleCheckRun_NoPRs_EnqueuesRepoJob(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("check_run no PRs = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeueRepo(context.Background())
 	if job == nil {
 		t.Error("expected repo job when check_run has no PR numbers")
 	}
@@ -377,8 +404,8 @@ func TestHandleCheckRun_NotCompleted_NoJob(t *testing.T) {
 		t.Errorf("check_run rerequested = %d", rec.Code)
 	}
 	ctx := context.Background()
-	pr, _ := h.Store.DequeuePR(ctx)     //nolint:errcheck
-	repo, _ := h.Store.DequeueRepo(ctx) //nolint:errcheck
+	pr, _ := h.Store.DequeuePR(ctx)    
+	repo, _ := h.Store.DequeueRepo(ctx)
 	if pr != nil || repo != nil {
 		t.Error("non-completed check_run should not enqueue anything")
 	}
@@ -407,7 +434,7 @@ func TestPushAndPullRequestDeduplicate(t *testing.T) {
 	ctx := context.Background()
 	var count int
 	for {
-		job, _ := h.Store.DequeuePR(ctx) //nolint:errcheck
+		job, _ := h.Store.DequeuePR(ctx)
 		if job == nil {
 			break
 		}
@@ -436,7 +463,7 @@ func TestRateLimitDelaysSecondEnqueue(t *testing.T) {
 
 	// First push — enqueues immediately.
 	postEvent(t, h, "push", body)
-	job, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeueRepo(context.Background())
 	if job == nil {
 		t.Fatal("first push should enqueue a job")
 	}
@@ -445,7 +472,7 @@ func TestRateLimitDelaysSecondEnqueue(t *testing.T) {
 	// because the first was just processed and the rate-limit window is 1 hour.
 	// The dedup key is the same so ON CONFLICT DO NOTHING fires instead.
 	postEvent(t, h, "push", body)
-	job2, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job2, _ := h.Store.DequeueRepo(context.Background())
 	if job2 != nil {
 		t.Error("second push within rate-limit window should not be dequeue-able immediately")
 	}
@@ -471,7 +498,7 @@ func TestAllowedRepositoriesFiltersRequests(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("blocked repo push = %d", rec.Code)
 	}
-	job, _ := h.Store.DequeueRepo(context.Background()) //nolint:errcheck
+	job, _ := h.Store.DequeueRepo(context.Background())
 	if job != nil {
 		t.Error("blocked repo should not produce a job")
 	}

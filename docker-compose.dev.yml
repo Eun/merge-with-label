@@ -1,7 +1,7 @@
 version: '3.9'
 services:
   postgres:
-    image: postgres:16-alpine
+    build: docker/postgres
     environment:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
