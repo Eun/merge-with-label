@@ -1,0 +1,90 @@
+# this workflow runs CI checks on all pushes and pull requests.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+
+name: "ci"
+jobs:
+  # run golangci-lint to lint the golang source code.
+  # the configuration is at /.golangci.yml.
+  linter:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout code
+        uses: actions/checkout@v6.0.2
+      -
+        name: Install mise
+        uses: jdx/mise-action@v4
+      -
+        name: Lint
+        run: mise run lint
+
+  # use nancy to scan for vulnerabilities.
+  vulnerability_scanner:
+    name: Vulnerability scanner
+    runs-on: ubuntu-latest
+    steps:
+      -
+        uses: actions/checkout@v6.0.2
+      -
+        name: Install mise
+        uses: jdx/mise-action@v4
+      -
+        name: nancy
+        run: mise exec -- go list -json -m all | docker run -i sonatypecommunity/nancy:latest
+
+  # run golang test suite and collect coverage.
+  test:
+    strategy:
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      -
+        name: Checkout code
+        uses: actions/checkout@v6.0.2
+      -
+        name: Install mise
+        uses: jdx/mise-action@v4
+      -
+        name: Test
+        run: mise run test
+      -
+        name: Upload coverage
+        if: matrix.platform == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage
+          path: coverage.out
+
+  # post code coverage report as a PR comment.
+  code_coverage:
+    name: "Code coverage report"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents:      read
+      actions:       read
+      pull-requests: write
+    steps:
+      - uses: fgrosse/go-coverage-report@v1.3.0
+        with:
+          coverage-artifact-name: "code-coverage"
+          coverage-file-name: "coverage.out"
+
+  # ensure the project builds successfully.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout code
+        uses: actions/checkout@v6.0.2
+      -
+        name: Install mise
+        uses: jdx/mise-action@v4
+      -
+        name: Build
+        run: mise run build
