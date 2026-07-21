@@ -246,11 +246,12 @@ func TestKVMiss(t *testing.T) {
 
 func TestKVExpiry(t *testing.T) {
 	ctx := context.Background()
-	// Use -time.Second (not -time.Millisecond) to ensure the expiry is
-	// clearly in the past by the time KVGet runs.
-	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("v"), -time.Second); err != nil {
+	// Set a very short TTL (1ms) then sleep to ensure it has expired.
+	const shortTTL = time.Millisecond
+	if err := sharedStore.KVSet(ctx, "test", t.Name(), []byte("v"), shortTTL); err != nil {
 		t.Fatalf("KVSet: %v", err)
 	}
+	time.Sleep(10 * time.Millisecond) // wait for expiry
 	got, err := sharedStore.KVGet(ctx, "test", t.Name())
 	if err != nil {
 		t.Fatalf("KVGet: %v", err)
