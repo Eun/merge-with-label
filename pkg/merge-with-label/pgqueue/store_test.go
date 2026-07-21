@@ -94,7 +94,7 @@ func TestRescheduleRepo(t *testing.T) {
 		t.Fatalf("DequeueRepo: err=%v job=%v", err, job)
 	}
 
-	dropped, err := sharedStore.RescheduleRepo(ctx, job.ID, key, payload, time.Millisecond, 5)
+	dropped, err := sharedStore.RescheduleRepo(ctx, job.ID, key, payload, job.Attempts, time.Millisecond, 5)
 	if err != nil {
 		t.Fatalf("RescheduleRepo: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestRescheduleRepoMaxAttempts(t *testing.T) {
 		t.Fatalf("DequeueRepo: err=%v", err)
 	}
 
-	dropped, err := sharedStore.RescheduleRepo(ctx, job.ID, key, payload, time.Millisecond, 1)
+	dropped, err := sharedStore.RescheduleRepo(ctx, job.ID, key, payload, job.Attempts, time.Millisecond, 1)
 	if err != nil {
 		t.Fatalf("RescheduleRepo: %v", err)
 	}
