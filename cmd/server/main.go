@@ -54,7 +54,14 @@ func main() {
 		return
 	}
 	defer store.Close()
-	logger.Debug().Msg("postgres ready")
+	logger.Debug().Msg("postgres connected")
+
+	logger.Info().Msg("running database migrations")
+	if err := store.Migrate(ctx); err != nil {
+		logger.Error().Err(err).Msg("unable to run database migrations")
+		return
+	}
+	logger.Info().Msg("database migrations complete")
 
 	srv := http.Server{
 		Addr:              address,

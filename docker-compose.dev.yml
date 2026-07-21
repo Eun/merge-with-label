@@ -8,6 +8,11 @@ services:
       POSTGRES_DB: merge_with_label
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   server:
     build: .
@@ -18,7 +23,13 @@ services:
       PORT: 8000
       PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   worker:
     build: .
@@ -30,6 +41,9 @@ services:
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_healthy
     deploy:
       replicas: 1

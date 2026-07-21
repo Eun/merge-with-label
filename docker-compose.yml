@@ -9,6 +9,11 @@ services:
       POSTGRES_DB: merge_with_label
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   server:
     image: ghcr.io/eun/merge-with-label:latest
@@ -20,7 +25,15 @@ services:
       PORT: 8000
       PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # The server is healthy once it responds to HTTP (migrations are done
+      # before it binds the port, so a 200/307 both mean ready).
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   worker:
     image: ghcr.io/eun/merge-with-label:latest
@@ -33,7 +46,10 @@ services:
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_healthy
     deploy:
       replicas: 1
 

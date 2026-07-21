@@ -69,7 +69,14 @@ func main() {
 		return
 	}
 	defer store.Close()
-	logger.Debug().Msg("postgres ready")
+	logger.Debug().Msg("postgres connected")
+
+	logger.Info().Msg("waiting for latest database schema")
+	if err := store.WaitForSchema(ctx); err != nil {
+		logger.Error().Err(err).Msg("unable to wait for database schema")
+		return
+	}
+	logger.Info().Msg("database schema is up to date")
 
 	w := worker.Worker{
 		Logger:  &logger,

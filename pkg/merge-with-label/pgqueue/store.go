@@ -10,18 +10,28 @@ package pgqueue
 
 import (
 	"context"
+	"database/sql"
+	"embed"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pkg/errors"
+	"github.com/pressly/goose/v3"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 // Store is the single entry-point for the Postgres queue and cache tables.
 type Store struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	db     *sql.DB // stdlib wrapper used only by goose
+	dsn    string
 }
 
-// New connects to Postgres using connString and runs the schema migration.
+// New connects to Postgres using connString and returns a ready Store.
+// It does NOT run migrations — call Migrate explicitly from the server.
 func New(ctx context.Context, connString string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(connString)
 	if err != nil {
@@ -33,61 +43,85 @@ func New(ctx context.Context, connString string) (*Store, error) {
 		return nil, errors.Wrap(err, "unable to create postgres pool")
 	}
 
-	s := &Store{pool: pool}
-	if err := s.migrate(ctx); err != nil {
-		pool.Close()
-		return nil, errors.Wrap(err, "unable to migrate schema")
-	}
-	return s, nil
+	// stdlib.OpenDBFromPool gives goose a *sql.DB backed by the same pool.
+	db := stdlib.OpenDBFromPool(pool)
+
+	return &Store{pool: pool, db: db, dsn: connString}, nil
 }
 
 // Close releases all pool connections.
 func (s *Store) Close() {
+	_ = s.db.Close()
 	s.pool.Close()
 }
 
-// schema creates all tables if they do not exist yet.
-// Two dedicated queue tables are used instead of a single table with a
-// msg_type discriminator so each queue can be optimised independently.
-const schema = `
-CREATE TABLE IF NOT EXISTS mwl_repo_queue (
-    id           BIGSERIAL    PRIMARY KEY,
-    dedup_key    TEXT         NOT NULL UNIQUE,
-    payload      JSONB        NOT NULL,
-    attempts     INT          NOT NULL DEFAULT 0,
-    available_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+// Migrate runs all pending goose migrations in the Up direction.
+// Called by the server on startup before it begins serving requests.
+func (s *Store) Migrate(ctx context.Context) error {
+	goose.SetBaseFS(migrationsFS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return errors.Wrap(err, "goose: set dialect")
+	}
+	if err := goose.UpContext(ctx, s.db, "migrations"); err != nil {
+		return errors.Wrap(err, "goose: up")
+	}
+	return nil
+}
 
-CREATE TABLE IF NOT EXISTS mwl_pr_queue (
-    id           BIGSERIAL    PRIMARY KEY,
-    dedup_key    TEXT         NOT NULL UNIQUE,
-    payload      JSONB        NOT NULL,
-    attempts     INT          NOT NULL DEFAULT 0,
-    available_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
+// gooseVersion returns the current applied schema version, or -1 on error.
+func (s *Store) gooseVersion(ctx context.Context) (int64, error) {
+	goose.SetBaseFS(migrationsFS)
+	if err := goose.SetDialect("postgres"); err != nil {
+		return -1, errors.Wrap(err, "goose: set dialect")
+	}
+	v, err := goose.GetDBVersionContext(ctx, s.db)
+	if err != nil {
+		return -1, errors.Wrap(err, "goose: get version")
+	}
+	return v, nil
+}
 
-CREATE TABLE IF NOT EXISTS mwl_kv (
-    bucket     TEXT        NOT NULL,
-    key        TEXT        NOT NULL,
-    value      BYTEA       NOT NULL,
-    expires_at TIMESTAMPTZ,
-    PRIMARY KEY (bucket, key)
-);
+// maxMigrationVersion returns the highest version present in the embedded
+// migration files (the version the schema should be at after Migrate).
+func maxMigrationVersion() (int64, error) {
+	goose.SetBaseFS(migrationsFS)
+	migrations, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	if err != nil {
+		return -1, errors.Wrap(err, "goose: collect migrations")
+	}
+	if len(migrations) == 0 {
+		return 0, nil
+	}
+	return migrations[len(migrations)-1].Version, nil
+}
 
-CREATE TABLE IF NOT EXISTS mwl_pr_state (
-    repo_node_id TEXT        NOT NULL,
-    pr_number    BIGINT      NOT NULL,
-    head_sha     TEXT        NOT NULL,
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (repo_node_id, pr_number)
-);
-`
+// WaitForSchema blocks until the database schema is fully up-to-date (i.e.
+// the applied version equals the maximum migration version defined in the
+// embedded files). It polls every second and respects ctx cancellation.
+// Called by the worker on startup so it never processes jobs before the
+// server has finished running the migrations.
+func (s *Store) WaitForSchema(ctx context.Context) error {
+	want, err := maxMigrationVersion()
+	if err != nil {
+		return err
+	}
 
-func (s *Store) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, schema)
-	return errors.Wrap(err, "migrate")
+	for {
+		got, err := s.gooseVersion(ctx)
+		if err == nil && got >= want {
+			return nil
+		}
+		if err != nil {
+			// Goose version table may not exist yet — that's fine, keep waiting.
+			_ = err
+		}
+
+		select {
+		case <-ctx.Done():
+			return errors.Wrap(ctx.Err(), "timed out waiting for schema migration")
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // Job is a single dequeued row.
@@ -157,13 +191,11 @@ func (s *Store) ReschedulePR(ctx context.Context, id int64, dedupKey string, pay
 }
 
 // -----------------------------------------------------------------------
-// Shared helpers (table name is a safe compile-time constant in each caller)
+// Shared queue helpers
 // -----------------------------------------------------------------------
 
 func dequeue(ctx context.Context, pool *pgxpool.Pool, table string) (*Job, error) {
 	var j Job
-	// The table name is a hard-coded string constant coming from this package —
-	// never from user input — so interpolation is safe here.
 	err := pool.QueryRow(ctx, `
 		DELETE FROM `+table+`
 		WHERE id = (
