@@ -22,7 +22,7 @@ func postgresDockerfilePath(t *testing.T) string {
 	if wdErr != nil {
 		t.Fatalf("os.Getwd: %v", wdErr)
 	}
-	return filepath.Join(wd, "..", "..", "..", "..", "..", "docker", "postgres")
+	return filepath.Join(wd, "..", "..", "..", "docker", "postgres")
 }
 
 // newTestStore spins up a postgres+pg_cron container built from docker/postgres/Dockerfile
