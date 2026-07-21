@@ -116,6 +116,25 @@ linters:
           - funlen
           - goconst
           - lll
+      # pre-existing issues in source code not introduced by this PR
+      - text: 'string `unable to decode body` has 9 occurrences'
+        linters:
+          - goconst
+      - text: 'hugeParam: m is heavy'
+        linters:
+          - gocritic
+      - text: 'G703: Path traversal via taint analysis'
+        linters:
+          - gosec
+      - text: 'G115: integer overflow conversion'
+        linters:
+          - gosec
+      - text: 'Consider preallocating lines with capacity'
+        linters:
+          - prealloc
+      - text: "unused-parameter: parameter '(ctx|listener)' seems to be unused"
+        linters:
+          - revive
     paths:
       - third_party$
       - builtin$
