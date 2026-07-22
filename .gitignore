@@ -1,4 +1,4 @@
 /.idea
 /*.pem
 /*.iml
-pg_data/
+/pg_data/
