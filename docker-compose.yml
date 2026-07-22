@@ -1,14 +1,21 @@
 version: '3.9'
 services:
   postgres:
-    build: docker/postgres
+    image: postgres:16
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=merge_with_label
+    volumes:
+      - ./docker/postgres-initdb:/docker-entrypoint-initdb.d:ro
+      - ./pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
       POSTGRES_DB: merge_with_label
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
       interval: 5s
@@ -53,5 +60,3 @@ services:
     deploy:
       replicas: 1
 
-volumes:
-  postgres_data:
