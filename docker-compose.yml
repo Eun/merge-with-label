@@ -11,7 +11,7 @@ services:
       - cron.database_name=merge_with_label
     volumes:
       - ./docker/postgres-initdb:/docker-entrypoint-initdb.d:ro
-      - postgres_data:/var/lib/postgresql/data
+      - ./pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
@@ -60,5 +60,3 @@ services:
     deploy:
       replicas: 1
 
-volumes:
-  postgres_data:

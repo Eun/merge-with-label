@@ -14,6 +14,8 @@ services:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
       POSTGRES_DB: merge_with_label
+    volumes:
+      - ./pg_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
