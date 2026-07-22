@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -20,6 +21,29 @@ import (
 
 func main() {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+
+	// --healthcheck mode: ping our own /healthz and exit 0/1.
+	if len(os.Args) == 2 && os.Args[1] == "--healthcheck" {
+		address := os.Getenv("ADDRESS")
+		if address == "" {
+			address = ":" + os.Getenv("PORT")
+		}
+		if address == ":" {
+			address = ":8000"
+		}
+		//nolint:noctx,gosec // healthcheck: address is localhost + env-controlled port, not user input
+		resp, err := http.Get("http://localhost" + address + "/healthz")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "healthcheck failed: %v\n", err)
+			os.Exit(1)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "healthcheck failed: status %d\n", resp.StatusCode)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

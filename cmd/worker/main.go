@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +21,30 @@ import (
 
 func main() {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
+
+	// --healthcheck mode: ping our own /healthz and exit 0/1.
+	if len(os.Args) == 2 && os.Args[1] == "--healthcheck" {
+		healthAddress := os.Getenv("HEALTH_ADDRESS")
+		if healthAddress == "" {
+			healthAddress = ":" + os.Getenv("HEALTH_PORT")
+		}
+		if healthAddress == ":" {
+			healthAddress = ":8001"
+		}
+		//nolint:noctx,gosec // healthcheck: address is localhost + env-controlled port, not user input
+		resp, err := http.Get("http://localhost" + healthAddress + "/healthz")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "healthcheck failed: %v\n", err)
+			os.Exit(1)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "healthcheck failed: status %d\n", resp.StatusCode)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
@@ -110,6 +136,37 @@ func main() {
 		PrivateKey: privateKeyBytes,
 	}
 
+	// Start a minimal health HTTP server so the Docker health check can
+	// confirm the worker process is alive without any external tools.
+	healthAddress := os.Getenv("HEALTH_ADDRESS")
+	if healthAddress == "" {
+		healthAddress = ":" + os.Getenv("HEALTH_PORT")
+	}
+	if healthAddress == ":" {
+		healthAddress = ":8001"
+	}
+	healthMux := http.NewServeMux()
+	healthMux.HandleFunc("/healthz", func(hw http.ResponseWriter, _ *http.Request) {
+		hw.WriteHeader(http.StatusOK)
+	})
+	healthSrv := &http.Server{
+		Addr:              healthAddress,
+		Handler:           healthMux,
+		ReadTimeout:       1 * time.Second,
+		WriteTimeout:      1 * time.Second,
+		IdleTimeout:       30 * time.Second, //nolint:mnd // set IdleTimeout
+		ReadHeaderTimeout: 2 * time.Second,  //nolint:mnd // set ReadHeaderTimeout
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
+	}
+	go func() {
+		logger.Info().Msgf("health server listening on %s", healthAddress)
+		if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error().Err(err).Msg("health server error")
+		}
+	}()
+
 	errChan := make(chan error)
 	go func() {
 		logger.Info().Msg("worker started")
@@ -119,6 +176,7 @@ func main() {
 	select {
 	case <-ctx.Done():
 		logger.Info().Msg("shutting down")
+		_ = healthSrv.Shutdown(context.Background())
 		_ = w.Shutdown(context.Background())
 	case err := <-errChan:
 		if err != nil {
