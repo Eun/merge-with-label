@@ -2,7 +2,7 @@
 go = "1.25.7"
 golangci-lint = "2.12.2"
 goreleaser = "2.16.0"
-"go:github.com/google/go-licenses" = "latest"
+"go:github.com/google/go-licenses" = "1.6.0"
 
 [tasks.build]
 description = "Build the merge-with-label binaries"
