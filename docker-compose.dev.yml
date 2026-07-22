@@ -1,11 +1,9 @@
 version: '3.9'
 services:
   postgres:
-    build: docker/postgres
+    image: supabase/postgres:17.6.1.151
     command:
       - postgres
-      - -c
-      - shared_preload_libraries=pg_cron
       - -c
       - cron.database_name=merge_with_label
     volumes:
