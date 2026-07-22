@@ -31,7 +31,8 @@ func main() {
 		if healthAddress == ":" {
 			healthAddress = ":8001"
 		}
-		resp, err := http.Get("http://localhost" + healthAddress + "/healthz") //nolint:noctx,gosec // healthcheck: address is derived from env, not user input
+		//nolint:noctx,gosec // healthcheck: address is localhost + env-controlled port, not user input
+		resp, err := http.Get("http://localhost" + healthAddress + "/healthz")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "healthcheck failed: %v\n", err)
 			os.Exit(1)
