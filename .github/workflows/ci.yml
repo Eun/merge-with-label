@@ -13,7 +13,7 @@ jobs:
     steps:
       -
         name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
       -
         name: Install mise
         uses: jdx/mise-action@v4
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       -
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
       -
         name: Install mise
         uses: jdx/mise-action@v4
@@ -41,7 +41,7 @@ jobs:
     steps:
       -
         name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
       -
         name: Install mise
         uses: jdx/mise-action@v4
@@ -50,7 +50,7 @@ jobs:
         run: mise run test
       -
         name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: code-coverage
           path: coverage.out
@@ -66,7 +66,7 @@ jobs:
       actions:       read
       pull-requests: write
     steps:
-      - uses: fgrosse/go-coverage-report@v1.3.0
+      - uses: fgrosse/go-coverage-report@v1.3.1
         with:
           coverage-artifact-name: "code-coverage"
           coverage-file-name: "coverage.out"
@@ -77,7 +77,7 @@ jobs:
     steps:
       -
         name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
       -
         name: Install mise
         uses: jdx/mise-action@v4

@@ -1,3 +1,5 @@
 /.idea
 /*.pem
 /*.iml
+/pg_data/
+dist/

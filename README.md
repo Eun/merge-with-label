@@ -3,7 +3,6 @@
 </p>
 
 [![Actions Status](https://github.com/Eun/merge-with-label/workflows/push/badge.svg)](https://github.com/Eun/merge-with-label/actions)
-[![Coverage Status](https://coveralls.io/repos/github/Eun/merge-with-label/badge.svg?branch=main)](https://coveralls.io/github/Eun/merge-with-label?branch=main)
 [![PkgGoDev](https://img.shields.io/badge/pkg.go.dev-reference-blue)](https://pkg.go.dev/github.com/Eun/merge-with-label)
 [![go-report](https://goreportcard.com/badge/github.com/Eun/merge-with-label)](https://goreportcard.com/report/github.com/Eun/merge-with-label)
 ---
@@ -46,7 +45,7 @@ merge:
   # never merge pull requests that match one of these titles (regex)
   #ignoreWithTitles:
   #  - "chore:.+"
-  # never update pull requests that match one of these labels (regex)
+  # never merge pull requests that match one of these labels (regex)
   #ignoreWithLabels:
   #  - "dont-merge"
 update:
@@ -54,14 +53,11 @@ update:
   # for updating (regex)
   # (or-list, only one label must be present on a pull request)
   # (leave empty to disable the update feature)
-  labels: 
+  labels:
     - "update-branch"
   # never update pull requests that were created by these users (regex)
   ignoreFromUsers:
     - "dependabot"
-  # never update pull requests that match one of these titles (regex)
-  #ignoreWithTitles:
-  #  - "chore:.+"
   # never update pull requests that match one of these titles (regex)
   #ignoreWithTitles:
   #  - "chore:.+"
@@ -83,7 +79,7 @@ update:
    | Pull requests   | Read and write |
    | Workflows       | Read and write |
 
-   ### Subscribe to events 
+   ### Subscribe to events
    - Check run
    - Pull request
    - Pull request review
@@ -96,70 +92,106 @@ update:
    ```yaml
    version: '3.9'
    services:
-     nats:
-       image: nats:2.9.20
+     postgres:
+       image: supabase/postgres:17.6.1.151
        restart: unless-stopped
-       command: ["--js", "-user", "nats", "-pass", "425751fd-62e2-4b73-9e1b-5a9b0dafc5ad"]
+       volumes:
+         - ./pg_data:/var/lib/postgresql/data
+       environment:
+         POSTGRES_USER: supabase_admin
+         POSTGRES_PASSWORD: <your postgres password>
+         POSTGRES_DB: postgres
+       healthcheck:
+         test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
+         interval: 5s
+         timeout: 5s
+         retries: 10
    
      server:
-       image: ghcr.io/eun/merge-with-label:latest
+       image: ghcr.io/eun/merge-with-label-server:latest
        restart: unless-stopped
        command: "/server"
        ports:
          - "8000:8000"
        environment:
          PORT: 8000
-         NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+         PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
        depends_on:
-         - nats
+         postgres:
+           condition: service_healthy
+       healthcheck:
+         test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
+         interval: 5s
+         timeout: 5s
+         retries: 12
    
      worker:
-       image: ghcr.io/eun/merge-with-label:latest
+       image: ghcr.io/eun/merge-with-label-worker:latest
        restart: unless-stopped
        command: "/worker"
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
        environment:
-         NATS_URL: nats://nats:425751fd-62e2-4b73-9e1b-5a9b0dafc5ad@nats:4222
+         PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
          APP_ID: <your app id>
          PRIVATE_KEY: /private-key.pem
        depends_on:
-         - server
+         postgres:
+           condition: service_healthy
+         server:
+           condition: service_healthy
+       deploy:
+         replicas: 1
    ```
    > Make sure you fill in your app id, provide the private-key.pem file
-   > and modify the nats username and password
+   > and set a secure Postgres password
 5. Point the webhook url to the deployment
 
 
 ### Fine Tuning Settings
-Following environment variables are available
+The following environment variables are available:
 
-| Variable                          | Default Value       |
-|-----------------------------------|---------------------|
-| `AllowedRepositories`             | `.*`                |
-| `AllowOnlyPublicRepositories`     | `false`             |
-| `BotName`                         | `merge-with-label`  |
-| `StreamName`                      | `mwl_bot_events`    |
-| `PullRequestSubject`              | `pull_request`      |
-| `PushSubject`                     | `push`              |
-| `MessageRetryAttempts`            | `5`                 |
-| `MessageRetryWait`                | `15s`               |
-| `RateLimitBucketName`             | `mwl_rate_limit`    |
-| `RateLimitBucketTTL`              | `24h`               |
-| `RateLimitInterval`               | `30s`               |
-| `AccessTokensBucketName`          | `mwl_access_tokens` |
-| `AccessTokensBucketTTL`           | `24h`               |
-| `ConfigsBucketName`               | `mwl_configs`       |
-| `ConfigsBucketTTL`                | `24h`               |
-| `CheckRunsBucketName`             | `mwl_check_runs`    |
-| `CheckRunsBucketTTL`              | `10m`               |
-| `DurationBeforeMergeAfterCheck`   | `10s`               |
-| `DurationToWaitAfterUpdateBranch` | `30s`               |
-| `MaxMessageAge`                   | `10m`               |
-| `MessageChannelSizePerSubject`    | `64`                |
+#### Server & Worker
+| Variable                      | Default Value | Description                                                        |
+|-------------------------------|---------------|--------------------------------------------------------------------|
+| `PostgresDSN`                 | *(required)*  | PostgreSQL connection string                                       |
+| `AllowedRepositories`         | `.*`          | Comma-separated list of repository patterns to allow (regex)       |
+| `AllowOnlyPublicRepositories` | `false`       | When true, ignore events from private repositories                 |
+| `RateLimitInterval`           | `30s`         | Minimum interval between processing the same repository            |
+| `DEBUG`                       | *(unset)*     | Set to any non-empty value to enable debug logging                 |
+| `TRACE`                       | *(unset)*     | Set to any non-empty value to enable trace logging                 |
 
-> Additionally, you can enable debug logging by setting the `DEBUG`
-> environment variable to `true`.
+#### Server & Worker
+
+| Variable                      | Default Value      | Description                                      |
+|-------------------------------|--------------------|--------------------------------------------------|
+| `PostgresDSN`                 | *(required)*       | PostgreSQL connection string                     |
+| `AllowedRepositories`         | `.*`               | Regex of repositories the bot may act on         |
+| `AllowOnlyPublicRepositories` | `false`            | Ignore events from private repositories          |
+| `RateLimitInterval`           | `30s`              | Minimum interval between merges for the same PR  |
+| `DEBUG`                       | `false`            | Enable debug logging                             |
+| `TRACE`                       | `false`            | Enable trace-level logging                       |
+
+#### Server only
+
+| Variable  | Default Value | Description                                            |
+|-----------|---------------|--------------------------------------------------------|
+| `ADDRESS` | *(unset)*     | Full listen address (e.g. `0.0.0.0:8000`); overrides `PORT` |
+| `PORT`    | `8000`        | Port to listen on (used when `ADDRESS` is not set)     |
+
+#### Worker only
+
+| Variable                          | Default Value      | Description                                          |
+|-----------------------------------|--------------------|------------------------------------------------------|
+| `APP_ID`                          | *(required)*       | GitHub App ID                                        |
+| `PRIVATE_KEY`                     | *(required)*       | Path to the GitHub App private key PEM file          |
+| `BotName`                         | `merge-with-label` | GitHub App bot username                              |
+| `MessageRetryAttempts`            | `5`                | Number of times to retry a failed job                |
+| `MessageRetryWait`                | `15s`              | Wait duration between retries                        |
+| `MaxConcurrentJobs`               | `10`               | Maximum number of parallel worker jobs               |
+| `DurationBeforeMergeAfterCheck`   | `10s`              | Wait after a check passes before merging             |
+| `DurationToWaitAfterUpdateBranch` | `30s`              | Wait after updating a branch before re-checking      |
+| `MessageChannelSizePerSubject`    | `64`               | Internal channel buffer size per queue subject       |
 
 ## Build History
 [![Build history](https://buildstats.info/github/chart/Eun/merge-with-label?branch=master)](https://github.com/Eun/merge-with-label/actions)

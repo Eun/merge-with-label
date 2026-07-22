@@ -1,48 +1,46 @@
 version: '3.9'
 services:
   postgres:
-    build: docker/postgres
+    image: supabase/postgres:17.6.1.151
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: mwl
-      POSTGRES_PASSWORD: mwl
-      POSTGRES_DB: merge_with_label
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./pg_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: supabase_admin
+      POSTGRES_PASSWORD: mwl
+      POSTGRES_DB: postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
+      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   server:
-    image: ghcr.io/eun/merge-with-label:latest
+    image: ghcr.io/eun/merge-with-label-server:latest
     restart: unless-stopped
     command: "/server"
     ports:
       - "8000:8000"
     environment:
       PORT: 8000
-      PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
+      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      # The server is healthy once it responds to HTTP (migrations are done
-      # before it binds the port, so a 200/307 both mean ready).
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 12
 
   worker:
-    image: ghcr.io/eun/merge-with-label:latest
+    image: ghcr.io/eun/merge-with-label-worker:latest
     restart: unless-stopped
     command: "/worker"
     volumes:
       - "./private-key.pem:/private-key.pem:ro"
     environment:
-      PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
+      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
@@ -52,6 +50,3 @@ services:
         condition: service_healthy
     deploy:
       replicas: 1
-
-volumes:
-  postgres_data:
