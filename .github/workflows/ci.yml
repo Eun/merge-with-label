@@ -84,3 +84,18 @@ jobs:
       -
         name: Build
         run: mise run build
+
+  # verify licenses/ matches current go.mod dependencies.
+  # if this fails, run: mise run licenses
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout code
+        uses: actions/checkout@v7.0.1
+      -
+        name: Install mise
+        uses: jdx/mise-action@v4
+      -
+        name: Check licenses
+        run: mise run licenses-check

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# shorthand name: licenses
+# mise skip_shellintegration: true
+# description: Regenerate the licenses/ directory from go.mod dependencies
+set -euo pipefail
+
+_flatten_licenses() {
+  local save_dir="$1" out_dir="$2"
+  find "$save_dir" -type f -name "LICENSE*" | while read -r f; do
+    # Only process files named LICENSE, LICENSE.txt, or LICENSE.md
+    basename_f="$(basename "$f")"
+    case "$basename_f" in
+      LICENSE|LICENSE.txt|LICENSE.md) ;;
+      *) continue ;;
+    esac
+    local rel="${f#$save_dir/}"
+    local dir="${rel%/*}"
+    for prefix in "github.com/" "gopkg.in/" "golang.org/x/" "go.uber.org/" "google.golang.org/"; do
+      dir="${dir#$prefix}"
+    done
+    local name="${dir//\//-}"
+    name="$(echo "$name" | sed 's/-v[0-9][0-9]*$//')"
+    name="$(echo "$name" | sed 's/\.v[0-9][0-9]*$//')"
+    cp "$f" "${out_dir}/${name}-license.MD"
+  done
+}
+
+SAVE_DIR="$(mktemp -d)"
+trap 'rm -rf "$SAVE_DIR"' EXIT
+
+go-licenses save ./... \
+  --save_path="$SAVE_DIR" \
+  --force \
+  --ignore github.com/Eun/merge-with-label
+
+rm -rf licenses
+mkdir -p licenses
+_flatten_licenses "$SAVE_DIR" licenses
+echo "licenses/ regenerated."
