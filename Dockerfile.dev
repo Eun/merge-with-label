@@ -1,0 +1,29 @@
+# Builder: installs mise, uses it to install Go, then builds both binaries.
+FROM debian:bookworm-slim AS builder
+
+WORKDIR /build
+
+# mise runtime deps
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      curl ca-certificates git \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install mise
+RUN curl -fsSL https://mise.run | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Copy project (mise.toml drives tool versions)
+COPY mise.toml ./
+RUN mise install
+
+# Copy source and build
+COPY . .
+RUN mise run build
+
+# Runtime: identical layer stack to the production Dockerfile
+FROM gcr.io/distroless/static-debian11
+COPY --from=builder /build/dist/server /server
+COPY --from=builder /build/dist/worker /worker
+COPY LICENSE /LICENSE
+COPY licenses /licenses

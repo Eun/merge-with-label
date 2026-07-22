@@ -15,7 +15,9 @@ services:
       retries: 10
 
   server:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     command: "/server"
     ports:
       - "8000:8000"
@@ -32,7 +34,9 @@ services:
       retries: 12
 
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     command: "/worker"
     volumes:
       - "./private-key.pem:/private-key.pem:ro"
