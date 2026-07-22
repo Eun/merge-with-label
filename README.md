@@ -90,7 +90,6 @@ update:
 4. Spin up the instance somewhere using `docker compose`
    ### docker-compose.yml
    ```yaml
-   version: '3.9'
    services:
      postgres:
        image: supabase/postgres:17.6.1.151
@@ -120,7 +119,7 @@ update:
          postgres:
            condition: service_healthy
        healthcheck:
-         test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
+         test: ["CMD", "/server", "--healthcheck"]
          interval: 5s
          timeout: 5s
          retries: 12
@@ -135,11 +134,17 @@ update:
          PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
          APP_ID: <your app id>
          PRIVATE_KEY: /private-key.pem
+         HEALTH_PORT: 8001
        depends_on:
          postgres:
            condition: service_healthy
          server:
            condition: service_healthy
+       healthcheck:
+         test: ["CMD", "/worker", "--healthcheck"]
+         interval: 5s
+         timeout: 5s
+         retries: 12
        deploy:
          replicas: 1
    ```
@@ -185,6 +190,8 @@ The following environment variables are available:
 |-----------------------------------|--------------------|------------------------------------------------------|
 | `APP_ID`                          | *(required)*       | GitHub App ID                                        |
 | `PRIVATE_KEY`                     | *(required)*       | Path to the GitHub App private key PEM file          |
+| `HEALTH_ADDRESS`                  | *(unset)*          | Full listen address for the health server (e.g. `0.0.0.0:8001`); overrides `HEALTH_PORT` |
+| `HEALTH_PORT`                     | `8001`             | Port for the worker health server (used by `--healthcheck` and Docker health checks) |
 | `BotName`                         | `merge-with-label` | GitHub App bot username                              |
 | `MessageRetryAttempts`            | `5`                | Number of times to retry a failed job                |
 | `MessageRetryWait`                | `15s`              | Wait duration between retries                        |
