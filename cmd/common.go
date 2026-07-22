@@ -17,50 +17,28 @@ const (
 	AllowedRepositoriesSetting             Setting = "AllowedRepositories"
 	AllowOnlyPublicRepositories            Setting = "AllowOnlyPublicRepositories"
 	BotNameSetting                         Setting = "BotName"
-	StreamNameSetting                      Setting = "StreamName"
-	PushSubjectSetting                     Setting = "PushSubject"
-	StatusSubjectSetting                   Setting = "StatusSubject"
-	PullRequestSubjectSetting              Setting = "PullRequestSubject"
+	PostgresDSNSetting                     Setting = "PostgresDSN"
+	RateLimitIntervalSetting               Setting = "RateLimitInterval"
 	MessageRetryAttemptsSetting            Setting = "MessageRetryAttempts"
 	MessageRetryWaitSetting                Setting = "MessageRetryWait"
-	RateLimitBucketNameSetting             Setting = "RateLimitBucketName"
-	RateLimitBucketTTLSetting              Setting = "RateLimitBucketTTL"
-	RateLimitIntervalSetting               Setting = "RateLimitInterval"
-	AccessTokensBucketNameSetting          Setting = "AccessTokensBucketName"
-	AccessTokensBucketTTLSetting           Setting = "AccessTokensBucketTTL"
-	ConfigsBucketNameSetting               Setting = "ConfigsBucketName"
-	ConfigsBucketTTLSetting                Setting = "ConfigsBucketTTL"
-	CheckRunsBucketNameSetting             Setting = "CheckRunsBucketName"
-	CheckRunsBucketTTLSetting              Setting = "CheckRunsBucketTTL"
 	DurationBeforeMergeAfterCheckSetting   Setting = "DurationBeforeMergeAfterCheck"
 	DurationToWaitAfterUpdateBranchSetting Setting = "DurationToWaitAfterUpdateBranch"
-	MaxMessageAgeSetting                   Setting = "MaxMessageAge"
 	MessageChannelSizePerSubjectSetting    Setting = "MessageChannelSizePerSubject"
+	MaxConcurrentJobsSetting               Setting = "MaxConcurrentJobs"
 )
 
 var defaultSettings = map[Setting]any{
 	AllowedRepositoriesSetting:             common.RegexSlice{common.MustNewRegexItem(".*")},
 	AllowOnlyPublicRepositories:            false,
 	BotNameSetting:                         "merge-with-label",
-	StreamNameSetting:                      "mwl_bot_events",
-	PushSubjectSetting:                     "push",
-	StatusSubjectSetting:                   "status",
-	PullRequestSubjectSetting:              "pull_request",
+	PostgresDSNSetting:                     "",               // empty: require explicit configuration via env var
+	RateLimitIntervalSetting:               time.Second * 30, //nolint:mnd // allow to set defaults
 	MessageRetryAttemptsSetting:            5,                //nolint:mnd // allow to set defaults
 	MessageRetryWaitSetting:                time.Second * 15, //nolint:mnd // allow to set defaults
-	RateLimitBucketNameSetting:             "mwl_rate_limit",
-	RateLimitBucketTTLSetting:              time.Hour * 24,   //nolint:mnd // allow to set defaults
-	RateLimitIntervalSetting:               time.Second * 30, //nolint:mnd // allow to set defaults
-	AccessTokensBucketNameSetting:          "mwl_access_tokens",
-	AccessTokensBucketTTLSetting:           time.Hour * 24, //nolint:mnd // allow to set defaults
-	ConfigsBucketNameSetting:               "mwl_configs",
-	ConfigsBucketTTLSetting:                time.Hour * 24, //nolint:mnd // allow to set defaults
-	CheckRunsBucketNameSetting:             "mwl_check_runs",
-	CheckRunsBucketTTLSetting:              time.Minute * 10, //nolint:mnd // allow to set defaults
 	DurationBeforeMergeAfterCheckSetting:   time.Second * 10, //nolint:mnd // allow to set defaults
 	DurationToWaitAfterUpdateBranchSetting: time.Second * 30, //nolint:mnd // allow to set defaults
-	MaxMessageAgeSetting:                   time.Minute * 10, //nolint:mnd // allow to set defaults
 	MessageChannelSizePerSubjectSetting:    64,               //nolint:mnd // allow to set defaults
+	MaxConcurrentJobsSetting:               10,               //nolint:mnd // allow to set defaults
 }
 
 func GetSetting[T any](name Setting) (t T) {

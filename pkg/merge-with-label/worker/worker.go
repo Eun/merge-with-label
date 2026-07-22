@@ -3,21 +3,23 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hashicorp/go-multierror"
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
-	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
-
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
+// pollInterval is how long the worker sleeps between queue polls when the
+// queue is empty.
+const pollInterval = 500 * time.Millisecond
+
+// Worker processes jobs from the two queue lanes (repo and pull_request).
 type Worker struct {
 	Logger  *zerolog.Logger
 	BotName string
@@ -25,22 +27,18 @@ type Worker struct {
 	AllowedRepositories         common.RegexSlice
 	AllowOnlyPublicRepositories bool
 
-	PushSubscription        *nats.Subscription
-	StatusSubscription      *nats.Subscription
-	PullRequestSubscription *nats.Subscription
+	Store *pgqueue.Store
 
-	AccessTokensKV nats.KeyValue
-	ConfigsKV      nats.KeyValue
-	CheckRunsKV    nats.KeyValue
+	RetryWait   time.Duration
+	MaxAttempts int // jobs exceeding this are permanently deleted; 0 = unlimited
 
-	JetStreamContext   nats.JetStreamContext
-	PullRequestSubject string
-	RetryWait          time.Duration
+	// MaxConcurrentJobs limits how many jobs run in parallel per queue lane.
+	// Defaults to 1 if zero, keeping existing sequential behavior.
+	MaxConcurrentJobs int
 
-	MaxDurationForPushWorker        time.Duration
+	MaxDurationForRepoWorker        time.Duration
 	MaxDurationForPullRequestWorker time.Duration
 
-	RateLimitKV       nats.KeyValue
 	RateLimitInterval time.Duration
 
 	DurationBeforeMergeAfterCheck       time.Duration
@@ -59,146 +57,162 @@ type pushBackError struct {
 	delay time.Duration
 }
 
-func (e pushBackError) Error() string {
-	return ""
+func (e pushBackError) Error() string { return "" }
+
+// Consume starts polling both queue lanes concurrently until the context is
+// canceled or Shutdown is called.
+func (w *Worker) Consume() error {
+	w.closeCh = make(chan struct{})
+	errChan := make(chan error, 2) //nolint:mnd // 2 queue types
+
+	repoMsgWorker := &repoWorker{Worker: w}
+	prMsgWorker := &pullRequestWorker{Worker: w}
+
+	maxConcurrent := w.MaxConcurrentJobs
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+
+	// startPoller is a generic polling loop parameterised by the dequeue and
+	// reschedule functions so each queue table gets its own dedicated goroutine
+	// without any shared msgType string. Each dequeued job is dispatched into
+	// its own goroutine; a semaphore caps parallelism to MaxConcurrentJobs so
+	// a slow or permanently-failing job never blocks work on other jobs.
+	type dequeueFn func(context.Context) (*pgqueue.Job, error)
+	type rescheduleFn func(context.Context, int64, string, []byte, int, time.Duration, int) (bool, error)
+
+	startPoller := func(
+		queueName string,
+		dequeueFn dequeueFn,
+		rescheduleFn rescheduleFn,
+		handle func(*zerolog.Logger, []byte) (dedupKey string, payload []byte, err error),
+	) {
+		go func() {
+			sem := make(chan struct{}, maxConcurrent)
+			for {
+				select {
+				case <-w.closeCh:
+					return
+				default:
+				}
+
+				// Acquire a slot before dequeueing so we don't pull a job we
+				// cannot start immediately.
+				select {
+				case sem <- struct{}{}:
+				case <-w.closeCh:
+					return
+				}
+
+				job, err := dequeueFn(context.Background())
+				if err != nil {
+					<-sem
+					errChan <- errors.Wrapf(err, "dequeue %s", queueName)
+					return
+				}
+				if job == nil {
+					<-sem
+					time.Sleep(pollInterval)
+					continue
+				}
+
+				w.Logger.Debug().Str("queue", queueName).Int64("job_id", job.ID).Msg("job dequeued")
+
+				// Process in a separate goroutine so the poller loop immediately
+				// picks up the next job (up to maxConcurrent).
+				go func(j *pgqueue.Job) {
+					defer func() { <-sem }()
+					dedupKey, payload, handleErr := handle(w.Logger, j.Payload)
+					if handleErr == nil {
+						return
+					}
+					var pbErr pushBackError
+					delay := w.RetryWait
+					if errors.As(handleErr, &pbErr) {
+						delay = pbErr.delay
+					} else {
+						w.Logger.Error().Err(handleErr).Str("queue", queueName).Msg("job failed")
+					}
+					dropped, reschedErr := rescheduleFn(
+						context.Background(), j.ID, dedupKey, payload, j.Attempts, delay, w.MaxAttempts,
+					)
+					if reschedErr != nil {
+						w.Logger.Error().Err(reschedErr).Msg("unable to reschedule job")
+					}
+					if dropped {
+						w.Logger.Warn().
+							Str("queue", queueName).
+							Str("dedup_key", dedupKey).
+							Int("max_attempts", w.MaxAttempts).
+							Msg("job permanently removed after max attempts")
+					}
+				}(job)
+			}
+		}()
+	}
+
+	startPoller("mwl_repo_queue", w.Store.DequeueRepo, w.Store.RescheduleRepo,
+		func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+			var m common.QueueRepoMessage
+			if err := json.Unmarshal(payload, &m); err != nil {
+				return "", payload, errors.Wrap(err, "unmarshal repo message")
+			}
+			dedupKey := common.RepoDedupKey(m.Repository.NodeID)
+			if !w.isAllowed(logger, &m) {
+				return dedupKey, payload, nil
+			}
+			return dedupKey, payload, repoMsgWorker.runLogic(logger, &m)
+		},
+	)
+
+	startPoller("mwl_pr_queue", w.Store.DequeuePR, w.Store.ReschedulePR,
+		func(logger *zerolog.Logger, payload []byte) (string, []byte, error) {
+			var m common.QueuePRMessage
+			if err := json.Unmarshal(payload, &m); err != nil {
+				return "", payload, errors.Wrap(err, "unmarshal PR message")
+			}
+			dedupKey := common.PRDedupKey(m.Repository.NodeID, m.PullRequest.Number)
+			if !w.isAllowed(logger, &m) {
+				return dedupKey, payload, nil
+			}
+			return dedupKey, payload, prMsgWorker.runLogic(logger, &m)
+		},
+	)
+
+	select {
+	case err := <-errChan:
+		return errors.Wrap(err, "poller error")
+	case <-w.closeCh:
+		w.Logger.Debug().Msg("close signal received")
+		return nil
+	}
 }
 
-func (worker *Worker) Consume() error {
-	worker.closeCh = make(chan struct{})
-	errChan := make(chan error)
-
-	pushChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.PushSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
-			}
-			pushChan <- msg
-		}
-	}()
-
-	statusChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.StatusSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
-			}
-			statusChan <- msg
-		}
-	}()
-
-	pullRequestChan := make(chan *nats.Msg, worker.MessageChannelSizePerSubjectSetting)
-	go func() {
-		for {
-			msg, err := worker.PullRequestSubscription.NextMsgWithContext(context.Background())
-			if err != nil {
-				errChan <- err
-				return
-			}
-			pullRequestChan <- msg
-		}
-	}()
-
-	pushMsgWorker := pushWorker{
-		Worker: worker,
-	}
-
-	statusMsgWorker := statusWorker{
-		Worker: worker,
-	}
-
-	pullRequestMsgWorker := pullRequestWorker{
-		Worker: worker,
-	}
-
-	for {
-		select {
-		case msg := <-pushChan:
-			worker.Logger.Debug().
-				Msg("push message received")
-			handleMessage[common.QueuePushMessage](worker, worker.Logger, msg, pushMsgWorker.runLogic)
-		case msg := <-statusChan:
-			worker.Logger.Debug().
-				Msg("status message received")
-			handleMessage[common.QueueStatusMessage](worker, worker.Logger, msg, statusMsgWorker.runLogic)
-		case msg := <-pullRequestChan:
-			worker.Logger.Debug().
-				Str("id", msg.Header.Get(nats.MsgIdHdr)).
-				Msg("pull_request message received")
-			handleMessage[common.QueuePullRequestMessage](worker, worker.Logger, msg, pullRequestMsgWorker.runLogic)
-		case err := <-errChan:
-			return errors.Wrap(err, "error received")
-		case <-worker.closeCh:
-			worker.Logger.Debug().Msg("close signal received")
-			return nil
-		}
-	}
-}
-
-func (worker *Worker) Shutdown(context.Context) error {
-	worker.closeCh <- struct{}{}
+// Shutdown signals all pollers to stop.
+func (w *Worker) Shutdown(context.Context) error {
+	close(w.closeCh)
 	return nil
 }
 
-func handleMessage[T common.Message](worker *Worker, logger *zerolog.Logger, msg *nats.Msg, fn func(logger *zerolog.Logger, m *T) error) {
-	if common.DelayMessageIfNeeded(logger, msg) {
-		return
-	}
-
-	var m T
-	if err := json.Unmarshal(msg.Data, &m); err != nil {
-		logger.Error().Err(err).Msg("unable to decode queue message")
-		if err := msg.NakWithDelay(worker.RetryWait); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-
-	if worker.AllowOnlyPublicRepositories && m.GetRepository().Private {
+func (w *Worker) isAllowed(logger *zerolog.Logger, m common.Message) bool {
+	if w.AllowOnlyPublicRepositories && m.GetRepository().Private {
 		logger.Warn().Str("repo", m.GetRepository().FullName).Msg("repository is not allowed (it is private)")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
+		return false
 	}
-
-	if worker.AllowedRepositories.ContainsOneOf(m.GetRepository().FullName) == "" {
+	if w.AllowedRepositories.ContainsOneOf(m.GetRepository().FullName) == "" {
 		logger.Warn().Str("repo", m.GetRepository().FullName).Msg("repository is not allowed")
-		if err := msg.Ack(); err != nil {
-			logger.Error().Err(err).Msg("unable to ack message")
-		}
-		return
+		return false
 	}
-
-	err := fn(logger, &m)
-	if err != nil {
-		var pbErr pushBackError
-		delay := worker.RetryWait
-		if errors.As(err, &pbErr) {
-			delay = pbErr.delay
-		} else {
-			logger.Error().Err(err).Msg("error")
-		}
-		if err := msg.NakWithDelay(delay); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return
-	}
-	if err := msg.Ack(); err != nil {
-		logger.Error().Err(err).Msg("unable to ack message")
-	}
+	return true
 }
 
-func (worker *Worker) workOnAllPullRequests(ctx context.Context,
-	rootLogger *zerolog.Logger,
-	sess *session) error {
+// fanOutPRs finds all eligible open PRs for a repo and enqueues a PR job for
+// each one. Because EnqueuePR uses ON CONFLICT DO NOTHING, a PR that is
+// already in the queue will not produce a duplicate row.
+func (w *Worker) fanOutPRs(ctx context.Context, rootLogger *zerolog.Logger, sess *session) error {
 	pullRequests, err := github.GetPullRequestsThatAreOpenAndHaveOneOfTheseLabels(
 		ctx,
-		worker.HTTPClient,
+		w.HTTPClient,
 		sess.AccessToken,
 		sess.Repository,
 		append(sess.Config.Update.Labels.Strings(), sess.Config.Merge.Labels.Strings()...),
@@ -213,28 +227,19 @@ func (worker *Worker) workOnAllPullRequests(ctx context.Context,
 
 	var result error
 	for i := range pullRequests {
-		err = common.QueueMessage(
-			rootLogger,
-			worker.JetStreamContext,
-			worker.RateLimitKV,
-			worker.RateLimitInterval,
-			worker.PullRequestSubject+"."+uuid.NewString(),
-			fmt.Sprintf("pull_request.%d.%s.%d", sess.InstallationID, sess.Repository.NodeID, pullRequests[i].Number),
-			&common.QueuePullRequestMessage{
-				BaseMessage: common.BaseMessage{
-					InstallationID: sess.InstallationID,
-					Repository:     *sess.Repository,
-				},
-				PullRequest: pullRequests[i],
-			})
+		err := common.EnqueuePR(ctx, rootLogger, w.Store, w.RateLimitInterval, &common.QueuePRMessage{
+			BaseMessage: common.BaseMessage{
+				InstallationID: sess.InstallationID,
+				Repository:     *sess.Repository,
+			},
+			PullRequest: pullRequests[i],
+		})
 		if err != nil {
-			rootLogger.Error().Int64("number", pullRequests[i].Number).Err(err).
-				Msg("unable to publish pull_request to queue")
-			result = multierror.Append(result, errors.Wrap(err, "unable to publish pull_request to queue"))
-			continue
+			rootLogger.Error().Int64("number", pullRequests[i].Number).Err(err).Msg("unable to enqueue PR")
+			result = multierror.Append(result, errors.Wrap(err, "unable to enqueue PR"))
+		} else {
+			rootLogger.Debug().Int64("number", pullRequests[i].Number).Msg("enqueued PR message")
 		}
-		rootLogger.Debug().Int64("number", pullRequests[i].Number).
-			Msg("published pull_request message")
 	}
 	return result
 }
