@@ -104,9 +104,9 @@ update:
        environment:
          POSTGRES_USER: supabase_admin
          POSTGRES_PASSWORD: <your postgres password>
-         POSTGRES_DB: merge_with_label
+         POSTGRES_DB: postgres
        healthcheck:
-         test: ["CMD-SHELL", "pg_isready -U supabase_admin -d merge_with_label"]
+         test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
          interval: 5s
          timeout: 5s
          retries: 10
