@@ -5,8 +5,8 @@
 # the one-time initdb phase (executed only when the data directory is
 # empty, i.e. on first start).
 #
-# It installs the postgresql-16-cron package and then creates the
-# pg_cron extension in the application database.
+# It installs the postgresql-16-cron package. The pg_cron extension itself
+# is created by the application migration.
 #
 # The required PostgreSQL configuration is passed via -c flags in the
 # docker-compose command: override, so no postgresql.conf editing is
@@ -19,10 +19,3 @@ apt-get update -q
 apt-get install -y --no-install-recommends postgresql-16-cron
 rm -rf /var/lib/apt/lists/*
 echo "[initdb] postgresql-16-cron installed."
-
-# Create the extension in the application database.
-# POSTGRES_DB is set by the official postgres image for use in initdb
-# scripts.
-psql -v "ON_ERROR_STOP=1" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-'EOSQL'
-CREATE EXTENSION IF NOT EXISTS pg_cron;
-EOSQe
