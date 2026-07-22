@@ -2,3 +2,4 @@
 /*.pem
 /*.iml
 /pg_data/
+dist/
