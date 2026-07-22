@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# description: Regenerate the licenses/ directory from go.mod dependencies
-set -euo pipefail
-
-go-licenses save ./... \
-  --save_path=licenses \
-  --force \
-  --ignore github.com/Eun/merge-with-label

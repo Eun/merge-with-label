@@ -24,4 +24,11 @@ run = "goreleaser release --snapshot --clean"
 description = "Remove build artifacts"
 run = "rm -rf dist coverage.out"
 
-# The licenses and licenses-check tasks live in .mise/tasks/ as executable scripts.
+[tasks.licenses]
+description = "Regenerate the licenses/ directory from go.mod dependencies"
+run = '''
+go-licenses save ./... \
+  --save_path=licenses \
+  --force \
+  --ignore github.com/Eun/merge-with-label
+'''
