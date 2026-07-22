@@ -31,7 +31,7 @@ func main() {
 		if address == ":" {
 			address = ":8000"
 		}
-		resp, err := http.Get("http://localhost" + address + "/healthz") //nolint:noctx // healthcheck is a one-shot call
+		resp, err := http.Get("http://localhost" + address + "/healthz") //nolint:noctx,gosec // healthcheck: address is derived from env, not user input
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "healthcheck failed: %v\n", err)
 			os.Exit(1)

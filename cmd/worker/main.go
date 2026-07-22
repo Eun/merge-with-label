@@ -31,7 +31,7 @@ func main() {
 		if healthAddress == ":" {
 			healthAddress = ":8001"
 		}
-		resp, err := http.Get("http://localhost" + healthAddress + "/healthz") //nolint:noctx // healthcheck is a one-shot call
+		resp, err := http.Get("http://localhost" + healthAddress + "/healthz") //nolint:noctx,gosec // healthcheck: address is derived from env, not user input
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "healthcheck failed: %v\n", err)
 			os.Exit(1)
@@ -153,8 +153,8 @@ func main() {
 		Handler:           healthMux,
 		ReadTimeout:       1 * time.Second,
 		WriteTimeout:      1 * time.Second,
-		IdleTimeout:       30 * time.Second,  //nolint:mnd // set IdleTimeout
-		ReadHeaderTimeout: 2 * time.Second,   //nolint:mnd // set ReadHeaderTimeout
+		IdleTimeout:       30 * time.Second, //nolint:mnd // set IdleTimeout
+		ReadHeaderTimeout: 2 * time.Second,  //nolint:mnd // set ReadHeaderTimeout
 		BaseContext: func(_ net.Listener) context.Context {
 			return ctx
 		},
