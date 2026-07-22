@@ -98,7 +98,7 @@ update:
          - ./pg_data:/var/lib/postgresql/data
        environment:
          POSTGRES_USER: supabase_admin
-         POSTGRES_PASSWORD: <your postgres password>
+         POSTGRES_PASSWORD: postgres
          POSTGRES_DB: postgres
        healthcheck:
          test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
@@ -114,7 +114,7 @@ update:
          - "8000:8000"
        environment:
          PORT: 8000
-         PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
+         PostgresDSN: "postgres://supabase_admin:postgres@postgres:5432/postgres?sslmode=disable"
        depends_on:
          postgres:
            condition: service_healthy
@@ -131,7 +131,7 @@ update:
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
        environment:
-         PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
+         PostgresDSN: "postgres://supabase_admin:postgres@postgres:5432/postgres?sslmode=disable"
          APP_ID: <your app id>
          PRIVATE_KEY: /private-key.pem
          HEALTH_PORT: 8001
