@@ -25,9 +25,6 @@ func TestMain(m *testing.M) {
 			"POSTGRES_PASSWORD": "test",
 			"POSTGRES_DB":       "testdb",
 		},
-		Cmd: []string{
-			"-c", "cron.database_name=testdb",
-		},
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").
 			WithOccurrence(2),
