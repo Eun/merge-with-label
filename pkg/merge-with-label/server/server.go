@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
-	"golang.org/x/exp/slices"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
 const maxBodyBytes = 1024 * 1024 * 16
@@ -28,12 +28,7 @@ type Handler struct {
 	AllowedRepositories         common.RegexSlice
 	AllowOnlyPublicRepositories bool
 
-	JetStreamContext   nats.JetStreamContext
-	PushSubject        string
-	StatusSubject      string
-	PullRequestSubject string
-
-	RateLimitKV       nats.KeyValue
+	Store             *pgqueue.Store
 	RateLimitInterval time.Duration
 }
 
@@ -58,10 +53,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	githubEvent := r.Header.Get("X-GitHub-Event")
 	githubID := r.Header.Get("X-GitHub-Delivery")
-
 	if githubID == "" {
 		githubID = uuid.NewString()
 	}
+	_ = githubID // event ID available for debugging; not yet forwarded to handlers
 
 	logger := h.GetLoggerForContext(r.Context()).With().Str("event", githubEvent).Logger()
 	if logger.GetLevel() == zerolog.TraceLevel {
@@ -77,22 +72,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch githubEvent {
 	case "check_run":
-		h.handleCheckRun(&logger, githubID, body, w)
-		return
+		h.handleCheckRun(r.Context(), &logger, body, w)
 	case "pull_request":
-		h.handlePullRequest(&logger, githubID, body, w)
-		return
+		h.handlePullRequest(r.Context(), &logger, body, w)
 	case "pull_request_review":
-		h.handlePullRequestReview(&logger, githubID, body, w)
-		return
+		h.handlePullRequestReview(r.Context(), &logger, body, w)
 	case "push":
-		h.handlePush(&logger, githubID, body, w)
-		return
+		h.handlePush(r.Context(), &logger, body, w, baseRequest)
 	case "status":
-		h.handleStatus(&logger, githubID, baseRequest, w)
-		return
+		h.handleRepoEvent(r.Context(), &logger, w, baseRequest, "status")
+	default:
+		h.respond(w, http.StatusOK, "ok")
 	}
-	h.respond(w, http.StatusOK, "ok")
 }
 
 func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body []byte, w http.ResponseWriter) *BaseRequest {
@@ -102,18 +93,15 @@ func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body [
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return nil
 	}
-
 	if !req.IsValid(rootLogger) {
 		h.respond(w, http.StatusOK, "ok")
 		return nil
 	}
-
 	if h.AllowOnlyPublicRepositories && req.Repository.Private {
 		rootLogger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
 		h.respond(w, http.StatusOK, "ok")
 		return nil
 	}
-
 	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
 		rootLogger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
 		h.respond(w, http.StatusOK, "ok")
@@ -122,7 +110,10 @@ func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body [
 	return &req
 }
 
-func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+// handleCheckRun handles check_run events. A check_run may reference zero,
+// one, or many PRs. If PR numbers are present we enqueue PR-level jobs; if
+// there are none we fall back to a repo-level job so the worker can fan out.
+func (h *Handler) handleCheckRun(ctx context.Context, logger *zerolog.Logger, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		CheckRun struct {
@@ -141,46 +132,42 @@ func (h *Handler) handleCheckRun(logger *zerolog.Logger, eventID string, body []
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return
 	}
-
 	if req.Action != "completed" {
 		logger.Debug().Msg("action is not completed")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
-	// remove duplicates
-	pullRequests := make(map[int64]struct{})
-	for _, request := range append(req.CheckRun.PullRequests, req.CheckRun.CheckSuite.PullRequests...) {
-		if request.Number == 0 {
-			continue
+	repo := h.repoFrom(&req.BaseRequest)
+
+	// Collect unique PR numbers from both check_run and check_suite.
+	seen := make(map[int64]struct{})
+	for _, pr := range append(req.CheckRun.PullRequests, req.CheckRun.CheckSuite.PullRequests...) {
+		if pr.Number != 0 {
+			seen[pr.Number] = struct{}{}
 		}
-		pullRequests[request.Number] = struct{}{}
 	}
 
-	for number := range pullRequests {
-		err := h.queuePullRequestMessage(
-			logger,
-			eventID,
-			&common.Repository{
-				NodeID:    req.Repository.NodeID,
-				FullName:  req.Repository.FullName,
-				Name:      req.Repository.Name,
-				OwnerName: req.Repository.Owner.Login,
-				Private:   req.Repository.Private,
-			},
-			req.Installation.ID,
-			&common.PullRequest{
-				Number: number,
-			})
-		if err != nil {
-			logger.Error().Err(err).Msg("unable to queue message")
+	if len(seen) == 0 {
+		// No PR numbers in the payload — treat as a repo-level event.
+		h.enqueueRepoOrError(ctx, logger, w, repo, req.Installation.ID)
+		return
+	}
+
+	for number := range seen {
+		if err := common.EnqueuePR(ctx, logger, h.Store, h.RateLimitInterval, &common.QueuePRMessage{
+			BaseMessage: common.BaseMessage{InstallationID: req.Installation.ID, Repository: *repo},
+			PullRequest: common.PullRequest{Number: number},
+		}); err != nil {
+			logger.Error().Err(err).Msg("unable to queue check_run PR message")
 			h.respond(w, http.StatusInternalServerError, "error")
 			return
 		}
 	}
 	h.respond(w, http.StatusOK, "ok")
 }
-func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+
+func (h *Handler) handlePullRequest(ctx context.Context, logger *zerolog.Logger, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		PullRequest struct {
@@ -188,24 +175,16 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 			State  string `json:"state"`
 		} `json:"pull_request"`
 	}
-
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error().Err(err).Msg("unable to decode request")
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return
 	}
-
 	if req.PullRequest.Number == 0 {
 		logger.Debug().Msg("no pull_request.number present in request")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
-	if req.PullRequest.State == "" {
-		logger.Debug().Msg("no pull_request.state present in request")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
 	if req.PullRequest.State != "open" {
 		logger.Debug().Msg("pull_request.state is not `open'")
 		h.respond(w, http.StatusOK, "ok")
@@ -219,33 +198,11 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 		return
 	}
 
-	if h.AllowOnlyPublicRepositories && req.Repository.Private {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	err := h.queuePullRequestMessage(
-		logger,
-		eventID,
-		&common.Repository{
-			NodeID:    req.Repository.NodeID,
-			FullName:  req.Repository.FullName,
-			Name:      req.Repository.Name,
-			OwnerName: req.Repository.Owner.Login,
-			Private:   req.Repository.Private,
-		},
-		req.Installation.ID,
-		&common.PullRequest{
-			Number: req.PullRequest.Number,
-		})
-	if err != nil {
+	repo := h.repoFrom(&req.BaseRequest)
+	if err := common.EnqueuePR(ctx, logger, h.Store, h.RateLimitInterval, &common.QueuePRMessage{
+		BaseMessage: common.BaseMessage{InstallationID: req.Installation.ID, Repository: *repo},
+		PullRequest: common.PullRequest{Number: req.PullRequest.Number},
+	}); err != nil {
 		logger.Error().Err(err).Msg("unable to queue pull_request message")
 		h.respond(w, http.StatusInternalServerError, "error")
 		return
@@ -253,7 +210,7 @@ func (h *Handler) handlePullRequest(logger *zerolog.Logger, eventID string, body
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+func (h *Handler) handlePullRequestReview(ctx context.Context, logger *zerolog.Logger, body []byte, w http.ResponseWriter) {
 	var req struct {
 		BaseRequest
 		PullRequest struct {
@@ -261,63 +218,32 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 			State  string `json:"state"`
 		} `json:"pull_request"`
 	}
-
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error().Err(err).Msg("unable to decode request")
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return
 	}
-
 	if req.PullRequest.Number == 0 {
 		logger.Debug().Msg("no pull_request.number present in request")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
-	if req.PullRequest.State == "" {
-		logger.Debug().Msg("no pull_request.state present in request")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
 	if req.PullRequest.State != "open" {
 		logger.Debug().Msg("pull_request.state is not `open'")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
-
 	if req.Action != "submitted" {
 		logger.Debug().Msg("action is not submitted")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
-	if h.AllowOnlyPublicRepositories && req.Repository.Private {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed (it is private)")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	if h.AllowedRepositories.ContainsOneOf(req.Repository.FullName) == "" {
-		logger.Warn().Str("repo", req.Repository.FullName).Msg("repository is not allowed")
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	err := h.queuePullRequestMessage(
-		logger,
-		eventID,
-		&common.Repository{
-			NodeID:    req.Repository.NodeID,
-			FullName:  req.Repository.FullName,
-			Name:      req.Repository.Name,
-			OwnerName: req.Repository.Owner.Login,
-			Private:   req.Repository.Private,
-		},
-		req.Installation.ID,
-		&common.PullRequest{
-			Number: req.PullRequest.Number,
-		})
-	if err != nil {
+	repo := h.repoFrom(&req.BaseRequest)
+	if err := common.EnqueuePR(ctx, logger, h.Store, h.RateLimitInterval, &common.QueuePRMessage{
+		BaseMessage: common.BaseMessage{InstallationID: req.Installation.ID, Repository: *repo},
+		PullRequest: common.PullRequest{Number: req.PullRequest.Number},
+	}); err != nil {
 		logger.Error().Err(err).Msg("unable to queue pull_request message")
 		h.respond(w, http.StatusInternalServerError, "error")
 		return
@@ -325,115 +251,59 @@ func (h *Handler) handlePullRequestReview(logger *zerolog.Logger, eventID string
 	h.respond(w, http.StatusOK, "ok")
 }
 
-func (h *Handler) handlePush(logger *zerolog.Logger, eventID string, body []byte, w http.ResponseWriter) {
+func (h *Handler) handlePush(ctx context.Context, logger *zerolog.Logger, body []byte, w http.ResponseWriter, base *BaseRequest) {
 	var req struct {
 		BaseRequest
 		Deleted bool   `json:"deleted"`
 		Ref     string `json:"ref"`
 	}
-
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error().Err(err).Msg("unable to decode request")
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return
 	}
-
-	if req.Deleted {
-		// no need to handle delete operations
+	if req.Deleted || req.Ref != "refs/heads/"+req.Repository.DefaultBranch {
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
-
-	if req.Ref != "refs/heads/"+req.Repository.DefaultBranch {
-		// no need to handle pushes that are not targeted to the master branch.
-		// pushes to branches will only be handled when there is a pull request open
-		// and if a pull request is open, github will call the pull_request synchronize event.
-		h.respond(w, http.StatusOK, "ok")
-		return
-	}
-
-	err := common.QueueMessage(
-		logger,
-		h.JetStreamContext,
-		h.RateLimitKV,
-		h.RateLimitInterval,
-		h.PushSubject+"."+eventID,
-		fmt.Sprintf("push.%d.%s", req.Installation.ID, req.Repository.NodeID),
-		&common.QueuePushMessage{
-			BaseMessage: common.BaseMessage{
-				InstallationID: req.Installation.ID,
-				Repository: common.Repository{
-					NodeID:    req.Repository.NodeID,
-					FullName:  req.Repository.FullName,
-					Name:      req.Repository.Name,
-					OwnerName: req.Repository.Owner.Login,
-					Private:   req.Repository.Private,
-				},
-			},
-		})
-	if err != nil {
-		logger.Error().Err(err).Msg("unable to queue push message")
-		h.respond(w, http.StatusInternalServerError, "error")
-		return
-	}
-	h.respond(w, http.StatusOK, "ok")
+	h.enqueueRepoOrError(ctx, logger, w, h.repoFrom(base), base.Installation.ID)
 }
 
-func (h *Handler) handleStatus(logger *zerolog.Logger, eventID string, baseRequest *BaseRequest, w http.ResponseWriter) {
-	err := common.QueueMessage(
-		logger,
-		h.JetStreamContext,
-		h.RateLimitKV,
-		h.RateLimitInterval,
-		h.StatusSubject+"."+eventID,
-		fmt.Sprintf("status.%d.%s", baseRequest.Installation.ID, baseRequest.Repository.NodeID),
-		&common.QueueStatusMessage{
-			BaseMessage: common.BaseMessage{
-				InstallationID: baseRequest.Installation.ID,
-				Repository: common.Repository{
-					NodeID:    baseRequest.Repository.NodeID,
-					FullName:  baseRequest.Repository.FullName,
-					Name:      baseRequest.Repository.Name,
-					OwnerName: baseRequest.Repository.Owner.Login,
-					Private:   baseRequest.Repository.Private,
-				},
-			},
-		})
-	if err != nil {
-		logger.Error().Err(err).Msg("unable to queue status message")
-		h.respond(w, http.StatusInternalServerError, "error")
-		return
-	}
-	h.respond(w, http.StatusOK, "ok")
+// handleRepoEvent is a shared handler for events that trigger repo-level work
+// (currently: status). All callers produce identical queue rows because the
+// dedup key is the same.
+func (h *Handler) handleRepoEvent(ctx context.Context, logger *zerolog.Logger, w http.ResponseWriter, base *BaseRequest, _ string) {
+	h.enqueueRepoOrError(ctx, logger, w, h.repoFrom(base), base.Installation.ID)
 }
 
-func (h *Handler) queuePullRequestMessage(
+func (h *Handler) enqueueRepoOrError(
+	ctx context.Context,
 	logger *zerolog.Logger,
-	eventID string,
-	repository *common.Repository,
+	w http.ResponseWriter,
+	repo *common.Repository,
 	installationID int64,
-	pullRequest *common.PullRequest,
-) error {
-	return common.QueueMessage(
-		logger,
-		h.JetStreamContext,
-		h.RateLimitKV,
-		h.RateLimitInterval,
-		h.PullRequestSubject+"."+eventID,
-		fmt.Sprintf("pull_request.%d.%s.%d", installationID, repository.NodeID, pullRequest.Number),
-		&common.QueuePullRequestMessage{
-			BaseMessage: common.BaseMessage{
-				InstallationID: installationID,
-				Repository:     *repository,
-			},
-			PullRequest: *pullRequest,
-		})
+) {
+	if err := common.EnqueueRepo(ctx, logger, h.Store, h.RateLimitInterval, &common.QueueRepoMessage{
+		BaseMessage: common.BaseMessage{InstallationID: installationID, Repository: *repo},
+	}); err != nil {
+		logger.Error().Err(err).Msg("unable to queue repo message")
+		h.respond(w, http.StatusInternalServerError, "error")
+		return
+	}
+	h.respond(w, http.StatusOK, "ok")
+}
+
+func (h *Handler) repoFrom(req *BaseRequest) *common.Repository {
+	return &common.Repository{
+		NodeID:    req.Repository.NodeID,
+		FullName:  req.Repository.FullName,
+		Name:      req.Repository.Name,
+		OwnerName: req.Repository.Owner.Login,
+		Private:   req.Repository.Private,
+	}
 }
 
 func (h *Handler) respond(w http.ResponseWriter, statusCode int, status string) {
-	if w == nil {
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_, _ = fmt.Fprintf(w, `{"status": %q}`, status)
