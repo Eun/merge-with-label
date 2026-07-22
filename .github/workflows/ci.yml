@@ -102,8 +102,14 @@ jobs:
       -
         name: Check for changes
         run: |
-          if ! git diff --exit-code; then
+          if ! git diff --exit-code licenses/; then
             echo ""
             echo "ERROR: licenses/ is out of date. Run 'mise run licenses' and commit the result."
+            exit 1
+          fi
+          if [ -n "$(git ls-files --others --exclude-standard licenses/)" ]; then
+            echo ""
+            echo "ERROR: licenses/ has new untracked files. Run 'mise run licenses' and commit the result."
+            git ls-files --others --exclude-standard licenses/
             exit 1
           fi
