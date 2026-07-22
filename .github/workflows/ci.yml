@@ -1,8 +1,8 @@
 # this workflow runs CI checks on all pushes and pull requests.
 on:
-  pull_request:
-    types: [opened, reopened, synchronize]
   push:
+    branches: [main]
+  pull_request:
 
 name: "ci"
 jobs:
