@@ -51,6 +51,9 @@ dockers:
     image_templates:
       - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}:{{.Version}}-amd64"
     dockerfile: "Dockerfile"
+    extra_files:
+      - LICENSE
+      - licenses
     build_flag_templates:
       - "--pull"
       - "--label=org.opencontainers.image.created={{.Date}}"
@@ -68,6 +71,9 @@ dockers:
     image_templates:
       - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}:{{.Version}}-arm64"
     dockerfile: "Dockerfile"
+    extra_files:
+      - LICENSE
+      - licenses
     build_flag_templates:
       - "--pull"
       - "--label=org.opencontainers.image.created={{.Date}}"
