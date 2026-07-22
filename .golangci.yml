@@ -139,6 +139,7 @@ linters:
       - third_party$
       - builtin$
       - examples$
+      - ^licenses/
 
 issues:
   max-issues-per-linter: 0
@@ -160,3 +161,4 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+      - ^licenses/
