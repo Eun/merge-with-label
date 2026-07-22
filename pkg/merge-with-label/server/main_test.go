@@ -25,7 +25,6 @@ func TestMain(m *testing.M) {
 		Image: "supabase/postgres:17.6.1.151",
 		Env: map[string]string{
 			"POSTGRES_PASSWORD": "test",
-			"POSTGRES_DB":       "testdb",
 		},
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").
@@ -47,7 +46,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("get port: " + err.Error())
 	}
-	dsn := "postgres://supabase_admin:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
+	dsn := "postgres://supabase_admin:test@" + host + ":" + port.Port() + "/postgres?sslmode=disable"
 
 	store, err := pgqueue.New(ctx, dsn)
 	if err != nil {

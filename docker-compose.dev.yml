@@ -6,11 +6,10 @@ services:
       - ./pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_PASSWORD: mwl
-      POSTGRES_DB: merge_with_label
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d merge_with_label"]
+      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -22,7 +21,7 @@ services:
       - "8000:8000"
     environment:
       PORT: 8000
-      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/merge_with_label?sslmode=disable"
+      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,7 +37,7 @@ services:
     volumes:
       - "./private-key.pem:/private-key.pem:ro"
     environment:
-      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/merge_with_label?sslmode=disable"
+      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
