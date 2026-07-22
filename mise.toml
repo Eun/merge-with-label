@@ -27,6 +27,7 @@ run = "rm -rf dist coverage.out"
 [tasks.licenses]
 description = "Regenerate the licenses/ directory from go.mod dependencies"
 run = '''
+go mod download
 go-licenses save ./... \
   --save_path=licenses \
   --force \
