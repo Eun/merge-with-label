@@ -22,7 +22,9 @@ func TestMain(m *testing.M) {
 	req := testcontainers.ContainerRequest{
 		Image: "supabase/postgres:17.6.1.151",
 		Env: map[string]string{
+			"POSTGRES_USER":     "supabase_admin",
 			"POSTGRES_PASSWORD": "test",
+			"POSTGRES_DB":       "testdb",
 		},
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").

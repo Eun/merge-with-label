@@ -102,9 +102,11 @@ update:
        volumes:
          - ./pg_data:/var/lib/postgresql/data
        environment:
+         POSTGRES_USER: supabase_admin
          POSTGRES_PASSWORD: <your postgres password>
+         POSTGRES_DB: merge_with_label
        healthcheck:
-         test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
+         test: ["CMD-SHELL", "pg_isready -U supabase_admin -d merge_with_label"]
          interval: 5s
          timeout: 5s
          retries: 10

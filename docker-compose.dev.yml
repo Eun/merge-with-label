@@ -5,11 +5,13 @@ services:
     volumes:
       - ./pg_data:/var/lib/postgresql/data
     environment:
+      POSTGRES_USER: supabase_admin
       POSTGRES_PASSWORD: mwl
+      POSTGRES_DB: merge_with_label
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d merge_with_label"]
       interval: 5s
       timeout: 5s
       retries: 10
