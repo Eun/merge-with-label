@@ -27,7 +27,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
+      test: ["CMD", "/server", "--healthcheck"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -42,10 +42,16 @@ services:
       PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
+      HEALTH_PORT: 8001
     depends_on:
       postgres:
         condition: service_healthy
       server:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/worker", "--healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     deploy:
       replicas: 1

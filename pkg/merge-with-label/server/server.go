@@ -33,6 +33,10 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.RequestURI == "/healthz" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if r.RequestURI != "/" && r.RequestURI != "" {
 		h.respond(w, http.StatusNotFound, "not found")
 		return
