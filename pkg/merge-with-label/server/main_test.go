@@ -24,7 +24,6 @@ func TestMain(m *testing.M) {
 	req := testcontainers.ContainerRequest{
 		Image: "supabase/postgres:17.6.1.151",
 		Env: map[string]string{
-			"POSTGRES_USER":     "test",
 			"POSTGRES_PASSWORD": "test",
 			"POSTGRES_DB":       "testdb",
 		},
@@ -51,7 +50,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("get port: " + err.Error())
 	}
-	dsn := "postgres://test:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
+	dsn := "postgres://supabase_admin:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
 
 	store, err := pgqueue.New(ctx, dsn)
 	if err != nil {
