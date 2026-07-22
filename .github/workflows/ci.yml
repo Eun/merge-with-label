@@ -97,5 +97,13 @@ jobs:
         name: Install mise
         uses: jdx/mise-action@v4
       -
-        name: Check licenses
-        run: mise run licenses-check
+        name: Regenerate licenses
+        run: mise run licenses
+      -
+        name: Check for changes
+        run: |
+          if ! git diff --exit-code; then
+            echo ""
+            echo "ERROR: licenses/ is out of date. Run 'mise run licenses' and commit the result."
+            exit 1
+          fi
