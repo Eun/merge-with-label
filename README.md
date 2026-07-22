@@ -3,7 +3,6 @@
 </p>
 
 [![Actions Status](https://github.com/Eun/merge-with-label/workflows/push/badge.svg)](https://github.com/Eun/merge-with-label/actions)
-[![Coverage Status](https://coveralls.io/repos/github/Eun/merge-with-label/badge.svg?branch=main)](https://coveralls.io/github/Eun/merge-with-label?branch=main)
 [![PkgGoDev](https://img.shields.io/badge/pkg.go.dev-reference-blue)](https://pkg.go.dev/github.com/Eun/merge-with-label)
 [![go-report](https://goreportcard.com/badge/github.com/Eun/merge-with-label)](https://goreportcard.com/report/github.com/Eun/merge-with-label)
 ---
@@ -46,7 +45,7 @@ merge:
   # never merge pull requests that match one of these titles (regex)
   #ignoreWithTitles:
   #  - "chore:.+"
-  # never update pull requests that match one of these labels (regex)
+  # never merge pull requests that match one of these labels (regex)
   #ignoreWithLabels:
   #  - "dont-merge"
 update:
@@ -54,14 +53,11 @@ update:
   # for updating (regex)
   # (or-list, only one label must be present on a pull request)
   # (leave empty to disable the update feature)
-  labels: 
+  labels:
     - "update-branch"
   # never update pull requests that were created by these users (regex)
   ignoreFromUsers:
     - "dependabot"
-  # never update pull requests that match one of these titles (regex)
-  #ignoreWithTitles:
-  #  - "chore:.+"
   # never update pull requests that match one of these titles (regex)
   #ignoreWithTitles:
   #  - "chore:.+"
@@ -83,7 +79,7 @@ update:
    | Pull requests   | Read and write |
    | Workflows       | Read and write |
 
-   ### Subscribe to events 
+   ### Subscribe to events
    - Check run
    - Pull request
    - Pull request review
@@ -151,7 +147,17 @@ update:
 
 
 ### Fine Tuning Settings
-Following environment variables are available
+The following environment variables are available:
+
+#### Server & Worker
+| Variable                      | Default Value | Description                                                        |
+|-------------------------------|---------------|--------------------------------------------------------------------|
+| `PostgresDSN`                 | *(required)*  | PostgreSQL connection string                                       |
+| `AllowedRepositories`         | `.*`          | Comma-separated list of repository patterns to allow (regex)       |
+| `AllowOnlyPublicRepositories` | `false`       | When true, ignore events from private repositories                 |
+| `RateLimitInterval`           | `30s`         | Minimum interval between processing the same repository            |
+| `DEBUG`                       | *(unset)*     | Set to any non-empty value to enable debug logging                 |
+| `TRACE`                       | *(unset)*     | Set to any non-empty value to enable trace logging                 |
 
 #### Server & Worker
 
