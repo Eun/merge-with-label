@@ -97,10 +97,12 @@ update:
    version: '3.9'
    services:
      postgres:
-       image: supabase/postgres:15.14.1.151
+       build: https://github.com/Eun/merge-with-label.git#main:docker/postgres
        restart: unless-stopped
        command:
          - postgres
+         - -c
+         - shared_preload_libraries=pg_cron
          - -c
          - cron.database_name=merge_with_label
        volumes:

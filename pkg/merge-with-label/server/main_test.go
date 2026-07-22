@@ -3,6 +3,7 @@ package server_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -21,14 +22,25 @@ var sharedHandler *server.Handler
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
+	wd, err := os.Getwd()
+	if err != nil {
+		panic("os.Getwd: " + err.Error())
+	}
+	dockerCtx := filepath.Join(wd, "..", "..", "..", "docker", "postgres")
+
 	req := testcontainers.ContainerRequest{
-		Image: "supabase/postgres:15.14.1.151",
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    dockerCtx,
+			Dockerfile: "Dockerfile",
+			KeepImage:  true,
+		},
 		Env: map[string]string{
 			"POSTGRES_DB":       "testdb",
 			"POSTGRES_USER":     "test",
 			"POSTGRES_PASSWORD": "test",
 		},
 		Cmd: []string{
+			"-c", "shared_preload_libraries=pg_cron",
 			"-c", "cron.database_name=testdb",
 		},
 		ExposedPorts: []string{"5432/tcp"},

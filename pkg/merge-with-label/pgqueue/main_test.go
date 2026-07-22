@@ -3,6 +3,7 @@ package pgqueue_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -19,14 +20,26 @@ var sharedStore *pgqueue.Store
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
+	// Resolve path to docker/postgres/ without a *testing.T.
+	wd, err := os.Getwd()
+	if err != nil {
+		panic("os.Getwd: " + err.Error())
+	}
+	dockerCtx := filepath.Join(wd, "..", "..", "..", "docker", "postgres")
+
 	req := testcontainers.ContainerRequest{
-		Image: "supabase/postgres:15.14.1.151",
+		FromDockerfile: testcontainers.FromDockerfile{
+			Context:    dockerCtx,
+			Dockerfile: "Dockerfile",
+			KeepImage:  true,
+		},
 		Env: map[string]string{
 			"POSTGRES_DB":       "testdb",
 			"POSTGRES_USER":     "test",
 			"POSTGRES_PASSWORD": "test",
 		},
 		Cmd: []string{
+			"-c", "shared_preload_libraries=pg_cron",
 			"-c", "cron.database_name=testdb",
 		},
 		ExposedPorts: []string{"5432/tcp"},
