@@ -1,7 +1,15 @@
 version: '3.9'
 services:
   postgres:
-    build: docker/postgres
+    image: postgres:16
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=merge_with_label
+    volumes:
+      - ./docker/postgres-initdb:/docker-entrypoint-initdb.d:ro
     environment:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
