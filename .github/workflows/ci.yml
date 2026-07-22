@@ -50,7 +50,7 @@ jobs:
         run: mise run test
       -
         name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: code-coverage
           path: coverage.out
