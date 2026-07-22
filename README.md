@@ -102,15 +102,14 @@ update:
        command:
          - postgres
          - -c
-         - cron.database_name=merge_with_label
+         - cron.database_name=postgres
        volumes:
          - ./pg_data:/var/lib/postgresql/data
        environment:
          POSTGRES_USER: mwl
          POSTGRES_PASSWORD: <your postgres password>
-         POSTGRES_DB: merge_with_label
        healthcheck:
-         test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
+         test: ["CMD-SHELL", "pg_isready -U mwl -d postgres"]
          interval: 5s
          timeout: 5s
          retries: 10
@@ -122,7 +121,7 @@ update:
          - "8000:8000"
        environment:
          PORT: 8000
-         PostgresDSN: "postgres://mwl:<your postgres password>@postgres:5432/merge_with_label?sslmode=disable"
+         PostgresDSN: "postgres://mwl:<your postgres password>@postgres:5432/postgres?sslmode=disable"
        depends_on:
          postgres:
            condition: service_healthy
@@ -138,7 +137,7 @@ update:
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
        environment:
-         PostgresDSN: "postgres://mwl:<your postgres password>@postgres:5432/merge_with_label?sslmode=disable"
+         PostgresDSN: "postgres://mwl:<your postgres password>@postgres:5432/postgres?sslmode=disable"
          APP_ID: <your app id>
          PRIVATE_KEY: /private-key.pem
        depends_on:

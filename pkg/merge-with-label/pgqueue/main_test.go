@@ -22,12 +22,11 @@ func TestMain(m *testing.M) {
 	req := testcontainers.ContainerRequest{
 		Image: "supabase/postgres:17.6.1.151",
 		Env: map[string]string{
-			"POSTGRES_DB":       "testdb",
 			"POSTGRES_USER":     "test",
 			"POSTGRES_PASSWORD": "test",
 		},
 		Cmd: []string{
-			"-c", "cron.database_name=testdb",
+			"-c", "cron.database_name=postgres",
 		},
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").
@@ -49,7 +48,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("get port: " + err.Error())
 	}
-	dsn := "postgres://test:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
+	dsn := "postgres://test:test@" + host + ":" + port.Port() + "/postgres?sslmode=disable"
 
 	sharedStore, err = pgqueue.New(ctx, dsn)
 	if err != nil {

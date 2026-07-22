@@ -6,47 +6,42 @@ services:
     command:
       - postgres
       - -c
-      - cron.database_name=merge_with_label
+      - cron.database_name=postgres
     volumes:
       - ./pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
-      POSTGRES_DB: merge_with_label
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
+      test: ["CMD-SHELL", "pg_isready -U mwl -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   server:
-    image: ghcr.io/eun/merge-with-label:latest
+    image: ghcr.io/eun/merge-with-label-server:latest
     restart: unless-stopped
-    command: "server"
     ports:
       - "8000:8000"
     environment:
       PORT: 8000
-      PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
+      PostgresDSN: "postgres://mwl:mwl@postgres:5432/postgres?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      # The server is healthy once it responds to HTTP (migrations are done
-      # before it binds the port, so a 200/307 both mean ready).
       test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 12
 
   worker:
-    image: ghcr.io/eun/merge-with-label:latest
+    image: ghcr.io/eun/merge-with-label-worker:latest
     restart: unless-stopped
-    command: "worker"
     volumes:
       - "./private-key.pem:/private-key.pem:ro"
     environment:
-      PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
+      PostgresDSN: "postgres://mwl:mwl@postgres:5432/postgres?sslmode=disable"
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
@@ -56,4 +51,3 @@ services:
         condition: service_healthy
     deploy:
       replicas: 1
-
