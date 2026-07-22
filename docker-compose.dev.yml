@@ -10,12 +10,11 @@ services:
       - cron.database_name=merge_with_label
     volumes:
       - ./docker/postgres-initdb:/docker-entrypoint-initdb.d:ro
+      - ./pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: mwl
       POSTGRES_PASSWORD: mwl
       POSTGRES_DB: merge_with_label
-    volumes:
-      - ./pg_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
