@@ -3,7 +3,6 @@ package pgqueue_test
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -20,27 +19,12 @@ var sharedStore *pgqueue.Store
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
-	// Resolve path to docker/postgres/ without a *testing.T.
-	wd, err := os.Getwd()
-	if err != nil {
-		panic("os.Getwd: " + err.Error())
-	}
-	dockerCtx := filepath.Join(wd, "..", "..", "..", "docker", "postgres")
-
 	req := testcontainers.ContainerRequest{
-		FromDockerfile: testcontainers.FromDockerfile{
-			Context:    dockerCtx,
-			Dockerfile: "Dockerfile",
-			KeepImage:  true,
-		},
+		Image: "supabase/postgres:17.6.1.151",
 		Env: map[string]string{
-			"POSTGRES_DB":       "testdb",
-			"POSTGRES_USER":     "test",
+			"POSTGRES_USER":     "supabase_admin",
 			"POSTGRES_PASSWORD": "test",
-		},
-		Cmd: []string{
-			"-c", "shared_preload_libraries=pg_cron",
-			"-c", "cron.database_name=testdb",
+			"POSTGRES_DB":       "testdb",
 		},
 		ExposedPorts: []string{"5432/tcp"},
 		WaitingFor: wait.ForLog("database system is ready to accept connections").
@@ -62,7 +46,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("get port: " + err.Error())
 	}
-	dsn := "postgres://test:test@" + host + ":" + port.Port() + "/testdb?sslmode=disable"
+	dsn := "postgres://supabase_admin:test@" + host + ":" + port.Port() + "/postgres?sslmode=disable"
 
 	sharedStore, err = pgqueue.New(ctx, dsn)
 	if err != nil {

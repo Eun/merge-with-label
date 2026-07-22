@@ -93,27 +93,20 @@ update:
    version: '3.9'
    services:
      postgres:
-       image: postgres:16
+       image: supabase/postgres:17.6.1.151
        restart: unless-stopped
-       command:
-         - postgres
-         - -c
-         - shared_preload_libraries=pg_cron
-         - -c
-         - cron.database_name=merge_with_label
        volumes:
-         - ./docker/postgres-initdb:/docker-entrypoint-initdb.d:ro
          - ./pg_data:/var/lib/postgresql/data
        environment:
-         POSTGRES_USER: mwl
-         POSTGRES_PASSWORD: mwl
-         POSTGRES_DB: merge_with_label
+         POSTGRES_USER: supabase_admin
+         POSTGRES_PASSWORD: <your postgres password>
+         POSTGRES_DB: postgres
        healthcheck:
-         test: ["CMD-SHELL", "pg_isready -U mwl -d merge_with_label"]
+         test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
          interval: 5s
          timeout: 5s
          retries: 10
-
+   
      server:
        image: ghcr.io/eun/merge-with-label-server:latest
        restart: unless-stopped
@@ -121,7 +114,7 @@ update:
          - "8000:8000"
        environment:
          PORT: 8000
-         PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
+         PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
        depends_on:
          postgres:
            condition: service_healthy
@@ -130,14 +123,14 @@ update:
          interval: 5s
          timeout: 5s
          retries: 12
-
+   
      worker:
        image: ghcr.io/eun/merge-with-label-worker:latest
        restart: unless-stopped
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
        environment:
-         PostgresDSN: "postgres://mwl:mwl@postgres:5432/merge_with_label?sslmode=disable"
+         PostgresDSN: "postgres://supabase_admin:<your postgres password>@postgres:5432/postgres?sslmode=disable"
          APP_ID: <your app id>
          PRIVATE_KEY: /private-key.pem
        depends_on:
@@ -148,7 +141,8 @@ update:
        deploy:
          replicas: 1
    ```
-   > Make sure you fill in your app id and provide the `private-key.pem` file.
+   > Make sure you fill in your app id, provide the private-key.pem file
+   > and set a secure Postgres password
 5. Point the webhook url to the deployment
 
 
@@ -165,24 +159,37 @@ The following environment variables are available:
 | `DEBUG`                       | *(unset)*     | Set to any non-empty value to enable debug logging                 |
 | `TRACE`                       | *(unset)*     | Set to any non-empty value to enable trace logging                 |
 
+#### Server & Worker
+
+| Variable                      | Default Value      | Description                                      |
+|-------------------------------|--------------------|--------------------------------------------------|
+| `PostgresDSN`                 | *(required)*       | PostgreSQL connection string                     |
+| `AllowedRepositories`         | `.*`               | Regex of repositories the bot may act on         |
+| `AllowOnlyPublicRepositories` | `false`            | Ignore events from private repositories          |
+| `RateLimitInterval`           | `30s`              | Minimum interval between merges for the same PR  |
+| `DEBUG`                       | `false`            | Enable debug logging                             |
+| `TRACE`                       | `false`            | Enable trace-level logging                       |
+
 #### Server only
-| Variable  | Default Value | Description                                                             |
-|-----------|---------------|-------------------------------------------------------------------------|
-| `ADDRESS` | *(unset)*     | Full listen address (e.g. `0.0.0.0:8000`). Overrides `PORT` when set.  |
-| `PORT`    | `8000`        | Port to listen on. Used when `ADDRESS` is not set.                      |
+
+| Variable  | Default Value | Description                                            |
+|-----------|---------------|--------------------------------------------------------|
+| `ADDRESS` | *(unset)*     | Full listen address (e.g. `0.0.0.0:8000`); overrides `PORT` |
+| `PORT`    | `8000`        | Port to listen on (used when `ADDRESS` is not set)     |
 
 #### Worker only
-| Variable                          | Default Value      | Description                                                   |
-|-----------------------------------|--------------------|---------------------------------------------------------------|
-| `APP_ID`                          | *(required)*       | GitHub App ID                                                 |
-| `PRIVATE_KEY`                     | *(required)*       | Path to the GitHub App private key PEM file                   |
-| `BotName`                         | `merge-with-label` | Name of the bot (used in log messages and comments)           |
-| `MessageRetryAttempts`            | `5`                | Number of times to retry a failed job                         |
-| `MessageRetryWait`                | `15s`              | Time to wait between retries                                  |
-| `MaxConcurrentJobs`               | `10`               | Maximum number of jobs processed concurrently                 |
-| `DurationBeforeMergeAfterCheck`   | `10s`              | How long to wait after all checks pass before merging         |
-| `DurationToWaitAfterUpdateBranch` | `30s`              | How long to wait after updating a branch before re-evaluating |
-| `MessageChannelSizePerSubject`    | `64`               | Internal channel buffer size per subject                      |
+
+| Variable                          | Default Value      | Description                                          |
+|-----------------------------------|--------------------|------------------------------------------------------|
+| `APP_ID`                          | *(required)*       | GitHub App ID                                        |
+| `PRIVATE_KEY`                     | *(required)*       | Path to the GitHub App private key PEM file          |
+| `BotName`                         | `merge-with-label` | GitHub App bot username                              |
+| `MessageRetryAttempts`            | `5`                | Number of times to retry a failed job                |
+| `MessageRetryWait`                | `15s`              | Wait duration between retries                        |
+| `MaxConcurrentJobs`               | `10`               | Maximum number of parallel worker jobs               |
+| `DurationBeforeMergeAfterCheck`   | `10s`              | Wait after a check passes before merging             |
+| `DurationToWaitAfterUpdateBranch` | `30s`              | Wait after updating a branch before re-checking      |
+| `MessageChannelSizePerSubject`    | `64`               | Internal channel buffer size per queue subject       |
 
 ## Build History
 [![Build history](https://buildstats.info/github/chart/Eun/merge-with-label?branch=master)](https://github.com/Eun/merge-with-label/actions)
