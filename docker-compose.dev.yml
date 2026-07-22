@@ -5,7 +5,7 @@ services:
       - ./pg_data:/var/lib/postgresql/data
     environment:
       POSTGRES_USER: supabase_admin
-      POSTGRES_PASSWORD: mwl
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
     ports:
       - "5432:5432"
@@ -24,7 +24,7 @@ services:
       - "8000:8000"
     environment:
       PORT: 8000
-      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
+      PostgresDSN: "postgres://supabase_admin:postgres@postgres:5432/postgres?sslmode=disable"
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,7 +42,7 @@ services:
     volumes:
       - "./private-key.pem:/private-key.pem:ro"
     environment:
-      PostgresDSN: "postgres://supabase_admin:mwl@postgres:5432/postgres?sslmode=disable"
+      PostgresDSN: "postgres://supabase_admin:postgres@postgres:5432/postgres?sslmode=disable"
       APP_ID: <your app id>
       PRIVATE_KEY: /private-key.pem
     depends_on:
