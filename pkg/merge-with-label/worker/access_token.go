@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/github"
 )
+
+const kvBucketAccessTokens = "access_tokens"
 
 func (worker *Worker) getAccessToken(
 	ctx context.Context,
@@ -25,43 +26,30 @@ func (worker *Worker) getAccessToken(
 		Str("hash_key", key).
 		Logger()
 
-	entry, err := worker.AccessTokensKV.Get(key)
-	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
-		return "", errors.Wrap(err, "unable to get access token from kv bucket")
+	value, err := worker.Store.KVGet(ctx, kvBucketAccessTokens, key)
+	if err != nil {
+		return "", errors.Wrap(err, "unable to get access token from store")
 	}
-	if entry == nil || len(entry.Value()) == 0 || errors.Is(err, nats.ErrKeyNotFound) {
+	if len(value) == 0 {
 		logger.Debug().
 			Str("reason", "not in cache").
 			Msg("creating a new access token")
-		return worker.createNewAccessToken(
-			ctx,
-			&logger,
-			repository,
-			installationID,
-			key,
-		)
+		return worker.createNewAccessToken(ctx, &logger, repository, installationID, key)
 	}
 
 	var cachedToken github.AccessToken
-	if err := json.Unmarshal(entry.Value(), &cachedToken); err != nil {
-		return "", errors.Wrap(err, "unable to decode access token from kv bucket")
+	if err := json.Unmarshal(value, &cachedToken); err != nil {
+		return "", errors.Wrap(err, "unable to decode access token from store")
 	}
 
 	if cachedToken.ExpiresAt.Before(time.Now()) {
 		logger.Debug().
 			Str("reason", "expired").
 			Msg("creating a new access token")
-		return worker.createNewAccessToken(
-			ctx,
-			&logger,
-			repository,
-			installationID,
-			key,
-		)
+		return worker.createNewAccessToken(ctx, &logger, repository, installationID, key)
 	}
 
-	logger.Debug().
-		Msg("got access token from cache")
+	logger.Debug().Msg("got access token from cache")
 	return cachedToken.Token, nil
 }
 
@@ -84,8 +72,12 @@ func (worker *Worker) createNewAccessToken(
 	}
 
 	rootLogger.Debug().Msg("storing access_token in cache")
-	if _, err := worker.AccessTokensKV.Put(key, buf); err != nil {
-		return "", errors.Wrap(err, "unable to store access token in kv bucket")
+	ttl := time.Until(accessToken.ExpiresAt)
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	if err := worker.Store.KVSet(ctx, kvBucketAccessTokens, key, buf, ttl); err != nil {
+		return "", errors.Wrap(err, "unable to store access token in store")
 	}
 	return accessToken.Token, nil
 }

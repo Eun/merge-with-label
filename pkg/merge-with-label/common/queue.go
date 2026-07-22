@@ -1,98 +1,103 @@
 package common
 
 import (
-	"crypto/md5" //nolint:gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
-	"encoding/binary"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
+
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 )
 
-func QueueMessage(
+const kvBucketRateLimit = "rate_limit"
+
+// EnqueueRepo enqueues a repo-level work item (push, status, etc.).
+// All events for the same repo share the same dedup key so only one row
+// ever exists in the queue per repo at a time.
+func EnqueueRepo(
+	ctx context.Context,
 	logger *zerolog.Logger,
-	js nats.JetStreamContext,
-	kv nats.KeyValue,
-	interval time.Duration,
-	subject,
-	msgID string,
-	msg any,
+	store *pgqueue.Store,
+	rateLimitInterval time.Duration,
+	msg *QueueRepoMessage,
 ) error {
-	const bufSize = 8 // 64 bit
-	//nolint:gosec // allow weak cryptographic, md5 is just used for creating a unique kv key
-	h := md5.Sum([]byte(msgID))
-	msgIDHash := hex.EncodeToString(h[:])
-	entry, err := kv.Get(msgIDHash)
-	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
-		return errors.Wrap(err, "unable to get rate limit from kv bucket")
-	}
-	if errors.Is(err, nats.ErrKeyNotFound) {
-		entry = nil
-	}
-	var lastMessageSendTime time.Time
-	if entry != nil && len(entry.Value()) != 0 {
-		lastMessageSendTime = time.Unix(int64(binary.LittleEndian.Uint64(entry.Value())), 0)
-	}
-
-	header := make(nats.Header)
-	diff := time.Until(lastMessageSendTime.Add(interval))
-	if diff > 0 {
-		// the same message was already sent in the interval
-		// add a msg id to skip duplicate message
-		// and add a header to delay the message until the interval was hit
-		header.Set(nats.MsgIdHdr, msgIDHash)
-		header.Set(DelayUntilHeader, time.Now().Add(diff).Format(time.RFC3339))
-	}
-	buf, err := json.Marshal(msg)
+	dedupKey := RepoDedupKey(msg.Repository.NodeID)
+	payload, availableAt, err := prepareEnqueue(ctx, store, rateLimitInterval, dedupKey, msg)
 	if err != nil {
-		return errors.Wrap(err, "unable to encode message")
+		return err
 	}
-
-	_, err = js.PublishMsgAsync(&nats.Msg{
-		Subject: subject,
-		Header:  header,
-		Data:    buf,
-	})
-
-	if err != nil {
-		return errors.Wrap(err, "unable to publish message to queue")
+	if err := store.EnqueueRepo(ctx, dedupKey, payload, availableAt); err != nil {
+		return errors.Wrap(err, "unable to enqueue repo message")
 	}
-	logger.
-		Debug().
-		Msg("published message")
-
-	b := make([]byte, bufSize)
-	binary.LittleEndian.PutUint64(b, uint64(time.Now().UTC().Unix()))
-	_, err = kv.Put(msgIDHash, b)
-	if err != nil {
-		return errors.Wrap(err, "unable to store last message time in kv bucket")
-	}
+	logger.Debug().Str("dedup_key", dedupKey).Msg("enqueued repo message")
 	return nil
 }
 
-func DelayMessageIfNeeded(logger *zerolog.Logger, msg *nats.Msg) bool {
-	delayUntilValue := msg.Header.Get(DelayUntilHeader)
-	if delayUntilValue == "" {
-		return false
-	}
-	delayUntil, err := time.Parse(time.RFC3339, delayUntilValue)
+// EnqueuePR enqueues a PR-level work item.
+// All events targeting the same PR share the same dedup key so only one row
+// ever exists in the queue per PR at a time.
+func EnqueuePR(
+	ctx context.Context,
+	logger *zerolog.Logger,
+	store *pgqueue.Store,
+	rateLimitInterval time.Duration,
+	msg *QueuePRMessage,
+) error {
+	dedupKey := PRDedupKey(msg.Repository.NodeID, msg.PullRequest.Number)
+	payload, availableAt, err := prepareEnqueue(ctx, store, rateLimitInterval, dedupKey, msg)
 	if err != nil {
-		logger.Error().Err(err).Msg("unable to parse delay until header")
-		if err := msg.Nak(); err != nil {
-			logger.Error().Err(err).Msg("unable to nak message")
-		}
-		return true
+		return err
 	}
-	diff := time.Until(delayUntil)
-	if diff > 0 {
-		logger.Debug().Str("id", msg.Header.Get(nats.MsgIdHdr)).Msg("message not yet ready")
-		if err := msg.NakWithDelay(diff); err != nil {
-			logger.Error().Err(err).Msg("unable to nak delay message")
-		}
-		return true
+	if err := store.EnqueuePR(ctx, dedupKey, payload, availableAt); err != nil {
+		return errors.Wrap(err, "unable to enqueue PR message")
 	}
-	return false
+	logger.Debug().Str("dedup_key", dedupKey).Msg("enqueued PR message")
+	return nil
+}
+
+// prepareEnqueue serializes msg and computes the rate-limit delay.
+func prepareEnqueue(
+	ctx context.Context,
+	store *pgqueue.Store,
+	rateLimitInterval time.Duration,
+	dedupKey string,
+	msg any,
+) (payload []byte, availableAt time.Time, err error) {
+	payload, err = json.Marshal(msg)
+	if err != nil {
+		return nil, time.Time{}, errors.Wrap(err, "unable to encode message")
+	}
+
+	availableAt = time.Now()
+	if rateLimitInterval <= 0 {
+		return payload, availableAt, nil
+	}
+
+	lastBytes, err := store.KVGet(ctx, kvBucketRateLimit, dedupKey)
+	if err != nil {
+		return nil, time.Time{}, errors.Wrap(err, "unable to get rate limit from store")
+	}
+	if len(lastBytes) == 8 { //nolint:mnd // 8 bytes for int64
+		var lastUnix int64
+		for i := range 8 {
+			lastUnix |= int64(lastBytes[i]) << (i * 8) //nolint:mnd // bit shift per byte
+		}
+		if diff := time.Until(time.Unix(lastUnix, 0).Add(rateLimitInterval)); diff > 0 {
+			availableAt = time.Now().Add(diff)
+		}
+	}
+
+	now := time.Now().UTC().Unix()
+	b := make([]byte, 8) //nolint:mnd // 8 bytes for int64
+	for i := range 8 {
+		b[i] = byte(now >> (i * 8)) //nolint:mnd // bit shift per byte
+	}
+	const rateLimitTTLMultiplier = 2
+	if err := store.KVSet(ctx, kvBucketRateLimit, dedupKey, b, rateLimitInterval*rateLimitTTLMultiplier); err != nil {
+		return nil, time.Time{}, errors.Wrap(err, "unable to store rate limit in store")
+	}
+
+	return payload, availableAt, nil
 }

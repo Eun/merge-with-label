@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+project_name: "merge-with-label"
+builds:
+  -
+    id: "server"
+    binary: "server"
+    main: "./cmd/server"
+    env:
+      - "CGO_ENABLED=0"
+    goos:
+      - "linux"
+    goarch:
+      - "arm64"
+      - "amd64"
+    ldflags:
+      - -s
+      - -w
+  -
+    id: "worker"
+    binary: "worker"
+    main: "./cmd/worker"
+    env:
+      - "CGO_ENABLED=0"
+    goos:
+      - "linux"
+    goarch:
+      - "arm64"
+      - "amd64"
+    ldflags:
+      - -s
+      - -w
+archives:
+  - name_template: "merge-with-label_{{.Version}}_{{.Os}}_{{.Arch}}"
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  version_template: "{{.Tag}}-next"
+changelog:
+  disable: true
+dockers:
+  -
+    goos: linux
+    goarch: amd64
+    ids:
+      - "server"
+    use: buildx
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}-amd64"
+    dockerfile: "Dockerfile"
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}-server"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--build-arg=BINARY=server"
+      - "--platform=linux/amd64"
+  -
+    goos: linux
+    goarch: arm64
+    ids:
+      - "server"
+    use: buildx
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}-arm64"
+    dockerfile: "Dockerfile"
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}-server"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--build-arg=BINARY=server"
+      - "--platform=linux/arm64"
+  -
+    goos: linux
+    goarch: amd64
+    ids:
+      - "worker"
+    use: buildx
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}-amd64"
+    dockerfile: "Dockerfile"
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}-worker"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--build-arg=BINARY=worker"
+      - "--platform=linux/amd64"
+  -
+    goos: linux
+    goarch: arm64
+    ids:
+      - "worker"
+    use: buildx
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}-arm64"
+    dockerfile: "Dockerfile"
+    build_flag_templates:
+      - "--pull"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}-worker"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--build-arg=BINARY=worker"
+      - "--platform=linux/arm64"
+docker_manifests:
+  -
+    name_template: "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:latest"
+    skip_push: '{{ if ne .Env.IS_LATEST_RELEASE "true" }}true{{ end }}'
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}-amd64"
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}-arm64"
+  -
+    name_template: "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}"
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}-amd64"
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-server:{{.Version}}-arm64"
+  -
+    name_template: "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:latest"
+    skip_push: '{{ if ne .Env.IS_LATEST_RELEASE "true" }}true{{ end }}'
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}-amd64"
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}-arm64"
+  -
+    name_template: "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}"
+    image_templates:
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}-amd64"
+      - "{{.Env.REGISTRY}}/{{.Env.IMAGE_NAME}}-worker:{{.Version}}-arm64"

@@ -8,12 +8,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
 
 	"github.com/Eun/merge-with-label/cmd"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/common"
+	"github.com/Eun/merge-with-label/pkg/merge-with-label/pgqueue"
 	"github.com/Eun/merge-with-label/pkg/merge-with-label/worker"
 )
 
@@ -57,142 +57,30 @@ func main() {
 		return
 	}
 
-	natsURL := os.Getenv("NATS_URL")
-	if natsURL == "" {
-		natsURL = nats.DefaultURL
+	dsnEnv := os.Getenv("PostgresDSN")
+	if dsnEnv == "" {
+		dsnEnv = cmd.GetSetting[string](cmd.PostgresDSNSetting)
 	}
-
-	logger.Debug().Msgf("connecting to %s", natsURL)
-	nc, err := nats.Connect(natsURL)
-	if err != nil {
-		logger.Error().Str("nats_url", natsURL).Msg("unable to connect to nats")
-		return
-	}
-	defer nc.Close()
-	logger.Debug().Msgf("connected to %s", natsURL)
-
-	logger.Debug().Msg("creating jetstream context")
-	js, err := nc.JetStream()
-	if err != nil {
-		logger.Error().Str("nats_url", natsURL).Msg("unable to create jetstream context")
+	if dsnEnv == "" {
+		logger.Error().Msg("PostgresDSN is not set")
 		return
 	}
 
-	logger.Debug().Msg("creating access_token kv")
-	accessTokensKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: cmd.GetSetting[string](cmd.AccessTokensBucketNameSetting),
-		TTL:    cmd.GetSetting[time.Duration](cmd.AccessTokensBucketTTLSetting),
-	})
+	logger.Debug().Msg("connecting to postgres")
+	store, err := pgqueue.New(ctx, dsnEnv)
 	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream key value bucket for access-tokens")
+		logger.Error().Err(err).Msg("unable to connect to postgres")
 		return
 	}
-	logger.Debug().Msg("configured access_token kv")
+	defer store.Close()
+	logger.Debug().Msg("postgres connected")
 
-	logger.Debug().Msg("creating configs kv")
-	configsKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: cmd.GetSetting[string](cmd.ConfigsBucketNameSetting),
-		TTL:    cmd.GetSetting[time.Duration](cmd.ConfigsBucketTTLSetting),
-	})
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream key value bucket for configs")
+	logger.Info().Msg("waiting for latest database schema")
+	if err := store.WaitForSchema(ctx); err != nil {
+		logger.Error().Err(err).Msg("unable to wait for database schema")
 		return
 	}
-	logger.Debug().Msg("configured configs kv")
-
-	logger.Debug().Msg("creating check_runs kv")
-	checkRunsKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: cmd.GetSetting[string](cmd.CheckRunsBucketNameSetting),
-		TTL:    cmd.GetSetting[time.Duration](cmd.CheckRunsBucketTTLSetting),
-	})
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream key value bucket for configs")
-		return
-	}
-	logger.Debug().Msg("configured check_runs kv")
-
-	logger.Debug().Msg("creating ratelimit kv")
-	rateLimitKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: cmd.GetSetting[string](cmd.RateLimitBucketNameSetting),
-		TTL:    cmd.GetSetting[time.Duration](cmd.RateLimitBucketTTLSetting),
-	})
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream key value bucket for push rate limit")
-		return
-	}
-	logger.Debug().Msg("configured ratelimit kv")
-
-	logger.Debug().Msg("subscribing to push subject")
-	pushSubscription, err := js.QueueSubscribeSync(
-		cmd.GetSetting[string](cmd.PushSubjectSetting)+".>",
-		"push-worker",
-		nats.AckExplicit(),
-		nats.MaxDeliver(cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting)),
-	)
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream subscriber for push queue")
-		return
-	}
-	defer func() {
-		if err := pushSubscription.Unsubscribe(); err != nil {
-			logger.Error().Err(err).Msg("unable to unsubscribe from push queue")
-		}
-	}()
-
-	logger.Debug().Msg("subscribing to status subject")
-	statusSubscription, err := js.QueueSubscribeSync(
-		cmd.GetSetting[string](cmd.StatusSubjectSetting)+".>",
-		"status-worker",
-		nats.AckExplicit(),
-		nats.MaxDeliver(cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting)),
-	)
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream subscriber for status queue")
-		return
-	}
-	defer func() {
-		if err := statusSubscription.Unsubscribe(); err != nil {
-			logger.Error().Err(err).Msg("unable to unsubscribe from status queue")
-		}
-	}()
-
-	logger.Debug().Msg("subscribing to pull_request subject")
-	pullRequestSubscription, err := js.QueueSubscribeSync(
-		cmd.GetSetting[string](cmd.PullRequestSubjectSetting)+".>",
-		"pull-request-worker",
-		nats.AckExplicit(),
-		nats.MaxDeliver(cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting)),
-	)
-	if err != nil {
-		logger.Error().
-			Err(err).
-			Str("nats_url", os.Getenv("NATS_URL")).
-			Msg("unable to create jetstream subscriber for pull_request queue")
-		return
-	}
-	defer func() {
-		if err := pullRequestSubscription.Unsubscribe(); err != nil {
-			logger.Error().Err(err).Msg("unable to unsubscribe from pull_request queue")
-		}
-	}()
+	logger.Info().Msg("database schema is up to date")
 
 	w := worker.Worker{
 		Logger:  &logger,
@@ -201,22 +89,15 @@ func main() {
 		AllowedRepositories:         cmd.GetSetting[common.RegexSlice](cmd.AllowedRepositoriesSetting),
 		AllowOnlyPublicRepositories: cmd.GetSetting[bool](cmd.AllowOnlyPublicRepositories),
 
-		PushSubscription:        pushSubscription,
-		StatusSubscription:      statusSubscription,
-		PullRequestSubscription: pullRequestSubscription,
+		Store: store,
 
-		AccessTokensKV: accessTokensKV,
-		ConfigsKV:      configsKV,
-		CheckRunsKV:    checkRunsKV,
+		RetryWait:         cmd.GetSetting[time.Duration](cmd.MessageRetryWaitSetting),
+		MaxAttempts:       cmd.GetSetting[int](cmd.MessageRetryAttemptsSetting),
+		MaxConcurrentJobs: cmd.GetSetting[int](cmd.MaxConcurrentJobsSetting),
 
-		JetStreamContext:   js,
-		PullRequestSubject: cmd.GetSetting[string](cmd.PullRequestSubjectSetting),
-		RetryWait:          cmd.GetSetting[time.Duration](cmd.MessageRetryWaitSetting),
-
-		MaxDurationForPushWorker:        time.Minute,
+		MaxDurationForRepoWorker:        time.Minute,
 		MaxDurationForPullRequestWorker: time.Minute,
 
-		RateLimitKV:       rateLimitKV,
 		RateLimitInterval: cmd.GetSetting[time.Duration](cmd.RateLimitIntervalSetting),
 
 		DurationBeforeMergeAfterCheck:       cmd.GetSetting[time.Duration](cmd.DurationBeforeMergeAfterCheckSetting),
