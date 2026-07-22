@@ -104,7 +104,7 @@ update:
      server:
        image: ghcr.io/eun/merge-with-label:latest
        restart: unless-stopped
-       command: "server"
+       command: "/server"
        ports:
          - "8000:8000"
        environment:
@@ -116,7 +116,7 @@ update:
      worker:
        image: ghcr.io/eun/merge-with-label:latest
        restart: unless-stopped
-       command: "worker"
+       command: "/worker"
        volumes:
          - "./private-key.pem:/private-key.pem:ro"
        environment:
