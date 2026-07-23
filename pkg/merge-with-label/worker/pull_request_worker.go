@@ -83,6 +83,14 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 
 	if didUpdatePullRequest && sess.Config.Merge.Labels.ContainsOneOf(details.Labels...) != "" {
 		logger.Debug().Msg("not merging, because pull request was just updated")
+		// Clear the PR state so the rescheduled job is not blocked by the SHA
+		// dedup guard. Without this, the synchronize event fired by the branch
+		// update can race the rescheduled job: if the synchronize job runs
+		// first it records the new SHA, and the rescheduled job then discards
+		// itself as a duplicate before ever attempting the merge.
+		if err := worker.Store.DeletePRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number); err != nil {
+			logger.Warn().Err(err).Msg("unable to clear pr state after update")
+		}
 		return pushBackError{delay: worker.DurationToWaitAfterUpdateBranch}
 	}
 

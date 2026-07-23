@@ -135,7 +135,8 @@ type Job struct {
 // -----------------------------------------------------------------------
 
 // EnqueueRepo inserts a repo-level job.
-// A second call with the same dedup_key is silently ignored (ON CONFLICT DO NOTHING).
+// If a job with the same dedup_key already exists, available_at is advanced to
+// the earlier of the existing and new values so a sooner trigger is never lost.
 func (s *Store) EnqueueRepo(ctx context.Context, dedupKey string, payload []byte, availableAt time.Time) error {
 	if availableAt.IsZero() {
 		availableAt = time.Now()
@@ -143,7 +144,8 @@ func (s *Store) EnqueueRepo(ctx context.Context, dedupKey string, payload []byte
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mwl_repo_queue (dedup_key, payload, available_at)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (dedup_key) DO NOTHING
+		ON CONFLICT (dedup_key) DO UPDATE
+		    SET available_at = LEAST(EXCLUDED.available_at, mwl_repo_queue.available_at)
 	`, dedupKey, payload, availableAt)
 	return errors.Wrap(err, "enqueue repo")
 }
@@ -168,7 +170,8 @@ func (s *Store) RescheduleRepo(
 // -----------------------------------------------------------------------
 
 // EnqueuePR inserts a per-PR job.
-// A second call with the same dedup_key is silently ignored (ON CONFLICT DO NOTHING).
+// If a job with the same dedup_key already exists, available_at is advanced to
+// the earlier of the existing and new values so a sooner trigger is never lost.
 func (s *Store) EnqueuePR(ctx context.Context, dedupKey string, payload []byte, availableAt time.Time) error {
 	if availableAt.IsZero() {
 		availableAt = time.Now()
@@ -176,7 +179,8 @@ func (s *Store) EnqueuePR(ctx context.Context, dedupKey string, payload []byte, 
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO mwl_pr_queue (dedup_key, payload, available_at)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (dedup_key) DO NOTHING
+		ON CONFLICT (dedup_key) DO UPDATE
+		    SET available_at = LEAST(EXCLUDED.available_at, mwl_pr_queue.available_at)
 	`, dedupKey, payload, availableAt)
 	return errors.Wrap(err, "enqueue pr")
 }
