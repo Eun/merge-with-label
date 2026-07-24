@@ -116,7 +116,7 @@ func (w *Worker) Consume() error {
 					continue
 				}
 
-				w.Logger.Debug().Str("queue", queueName).Int64("job_id", job.ID).Msg("job dequeued")
+				w.Logger.Info().Str("queue", queueName).Int64("job_id", job.ID).Int("attempt", job.Attempts+1).Msg("job dequeued")
 
 				// Process in a separate goroutine so the poller loop immediately
 				// picks up the next job (up to maxConcurrent).
@@ -145,6 +145,12 @@ func (w *Worker) Consume() error {
 							Str("dedup_key", dedupKey).
 							Int("max_attempts", w.MaxAttempts).
 							Msg("job permanently removed after max attempts")
+					} else {
+						w.Logger.Info().
+							Str("queue", queueName).
+							Str("dedup_key", dedupKey).
+							Dur("retry_in", delay).
+							Msg("job rescheduled")
 					}
 				}(job)
 			}
@@ -161,6 +167,7 @@ func (w *Worker) Consume() error {
 			if !w.isAllowed(logger, &m) {
 				return dedupKey, payload, nil
 			}
+			logger.Info().Str("repo", m.Repository.FullName).Msg("processing repo job")
 			return dedupKey, payload, repoMsgWorker.runLogic(logger, &m)
 		},
 	)
@@ -175,6 +182,7 @@ func (w *Worker) Consume() error {
 			if !w.isAllowed(logger, &m) {
 				return dedupKey, payload, nil
 			}
+			logger.Info().Str("repo", m.Repository.FullName).Int64("pr", m.PullRequest.Number).Msg("processing PR job")
 			return dedupKey, payload, prMsgWorker.runLogic(logger, &m)
 		},
 	)
