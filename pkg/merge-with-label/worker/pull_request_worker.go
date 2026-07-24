@@ -73,6 +73,8 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return errors.Wrap(err, "unable to set pr state")
 	}
 
+	logger.Info().Str("sha", details.LastCommitSha).Int("ahead_by", details.AheadBy).Msg("processing pull request")
+
 	stopLogic, didUpdatePullRequest, err := worker.updatePullRequest(ctx, &logger, sess, details)
 	if err != nil {
 		return errors.WithStack(err)

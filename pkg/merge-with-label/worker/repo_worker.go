@@ -32,5 +32,6 @@ func (worker *repoWorker) runLogic(rootLogger *zerolog.Logger, msg *common.Queue
 		return nil
 	}
 
+	logger.Info().Msg("fanning out PRs for repo event")
 	return worker.fanOutPRs(ctx, &logger, sess)
 }
