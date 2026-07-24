@@ -60,13 +60,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if githubID == "" {
 		githubID = uuid.NewString()
 	}
-	_ = githubID // event ID available for debugging; not yet forwarded to handlers
 
-	logger := h.GetLoggerForContext(r.Context()).With().Str("event", githubEvent).Logger()
+	logger := h.GetLoggerForContext(r.Context()).With().
+		Str("event", githubEvent).
+		Str("delivery", githubID).
+		Logger()
 	if logger.GetLevel() == zerolog.TraceLevel {
-		logger.Trace().Str("body", string(body)).Msg("got event")
+		logger.Trace().Str("body", string(body)).Msg("received webhook")
 	} else {
-		logger.Debug().Msg("got event")
+		logger.Info().Msg("received webhook")
 	}
 
 	baseRequest := h.unmarshalAndValidateRequest(&logger, body, w)
@@ -86,6 +88,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "status":
 		h.handleRepoEvent(r.Context(), &logger, w, baseRequest, "status")
 	default:
+		logger.Info().Msg("ignoring unhandled event type")
 		h.respond(w, http.StatusOK, "ok")
 	}
 }
@@ -93,11 +96,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body []byte, w http.ResponseWriter) *BaseRequest {
 	var req BaseRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		rootLogger.Error().Err(err).Msg("unable to decode request")
+		rootLogger.Error().Err(err).Msg("unable to decode request body")
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return nil
 	}
 	if !req.IsValid(rootLogger) {
+		rootLogger.Debug().Msg("request is not valid, skipping")
 		h.respond(w, http.StatusOK, "ok")
 		return nil
 	}
@@ -111,6 +115,7 @@ func (h *Handler) unmarshalAndValidateRequest(rootLogger *zerolog.Logger, body [
 		h.respond(w, http.StatusOK, "ok")
 		return nil
 	}
+	rootLogger.Info().Str("repo", req.Repository.FullName).Msg("request validated")
 	return &req
 }
 
@@ -137,7 +142,7 @@ func (h *Handler) handleCheckRun(ctx context.Context, logger *zerolog.Logger, bo
 		return
 	}
 	if req.Action != "completed" {
-		logger.Debug().Msg("action is not completed")
+		logger.Info().Str("action", req.Action).Msg("ignoring check_run: action is not completed")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
@@ -185,23 +190,27 @@ func (h *Handler) handlePullRequest(ctx context.Context, logger *zerolog.Logger,
 		return
 	}
 	if req.PullRequest.Number == 0 {
-		logger.Debug().Msg("no pull_request.number present in request")
+		logger.Info().Msg("ignoring pull_request: no pull_request.number present")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 	if req.PullRequest.State != "open" {
-		logger.Debug().Msg("pull_request.state is not `open'")
+		logger.Info().Str("state", req.PullRequest.State).Msg("ignoring pull_request: state is not open")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
 	handleActions := []string{"created", "opened", "labeled", "reopened", "synchronize", "edited"}
 	if slices.Index(handleActions, req.Action) == -1 {
-		logger.Debug().Msgf("action is not one of %s", strings.Join(handleActions, ", "))
+		logger.Info().Str("action", req.Action).Msgf("ignoring pull_request: action is not one of %s", strings.Join(handleActions, ", "))
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 
+	logger.Info().
+		Str("action", req.Action).
+		Int64("pr", req.PullRequest.Number).
+		Msg("enqueueing pull_request")
 	repo := h.repoFrom(&req.BaseRequest)
 	if err := common.EnqueuePR(ctx, logger, h.Store, h.RateLimitInterval, &common.QueuePRMessage{
 		BaseMessage: common.BaseMessage{InstallationID: req.Installation.ID, Repository: *repo},
@@ -228,17 +237,17 @@ func (h *Handler) handlePullRequestReview(ctx context.Context, logger *zerolog.L
 		return
 	}
 	if req.PullRequest.Number == 0 {
-		logger.Debug().Msg("no pull_request.number present in request")
+		logger.Info().Msg("ignoring pull_request_review: no pull_request.number present")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 	if req.PullRequest.State != "open" {
-		logger.Debug().Msg("pull_request.state is not `open'")
+		logger.Info().Str("state", req.PullRequest.State).Msg("ignoring pull_request_review: state is not open")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
 	if req.Action != "submitted" {
-		logger.Debug().Msg("action is not submitted")
+		logger.Info().Str("action", req.Action).Msg("ignoring pull_request_review: action is not submitted")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
@@ -267,9 +276,11 @@ func (h *Handler) handlePush(ctx context.Context, logger *zerolog.Logger, body [
 		return
 	}
 	if req.Deleted || req.Ref != "refs/heads/"+req.Repository.DefaultBranch {
+		logger.Info().Str("ref", req.Ref).Msg("ignoring push: not a push to the default branch")
 		h.respond(w, http.StatusOK, "ok")
 		return
 	}
+	logger.Info().Str("ref", req.Ref).Msg("enqueueing repo job for push to default branch")
 	h.enqueueRepoOrError(ctx, logger, w, h.repoFrom(base), base.Installation.ID)
 }
 
