@@ -33,6 +33,12 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logger := h.GetLoggerForContext(r.Context())
+	logger.Debug().
+		Str("method", r.Method).
+		Str("uri", r.RequestURI).
+		Str("remote_addr", r.RemoteAddr)
+		Msg("received request")
 	if r.RequestURI == "/healthz" {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -47,12 +53,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer r.Body.Close()
-
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
-		h.GetLoggerForContext(r.Context()).Error().Err(err).Msg("unable to read body")
+		logger.Error().Err(err).Msg("unable to read body")
 		h.respond(w, http.StatusBadRequest, "bad request")
 		return
+	}
+
+	if logger.GetLevel() == zerolog.TraceLevel {
+		logger.Trace().
+			Str("body", string(body)).
+			Msg("read request body")
 	}
 
 	githubEvent := r.Header.Get("X-GitHub-Event")
@@ -61,15 +72,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		githubID = uuid.NewString()
 	}
 
-	logger := h.GetLoggerForContext(r.Context()).With().
+	logger = logger.With().
 		Str("event", githubEvent).
 		Str("delivery", githubID).
 		Logger()
-	if logger.GetLevel() == zerolog.TraceLevel {
-		logger.Trace().Str("body", string(body)).Msg("received webhook")
-	} else {
-		logger.Info().Msg("received webhook")
-	}
+	logger.Info().Msg("received webhook")
 
 	baseRequest := h.unmarshalAndValidateRequest(&logger, body, w)
 	if baseRequest == nil {
