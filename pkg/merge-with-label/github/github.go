@@ -430,6 +430,7 @@ type PullRequestDetails struct {
 	ApprovedBy       []string
 	Author           string
 	BaseRefName      string
+	BaseRefOid       string
 	CheckStates      map[string]string
 	HasConflicts     bool
 	HeadRefID        string
@@ -530,6 +531,11 @@ func GetPullRequestDetails(
 							} `json:"commit"`
 						} `json:"nodes"`
 					} `json:"commits" graphql:"commits(last:1)"`
+					BaseRef struct {
+						Target struct {
+							Oid string `json:"oid"`
+						} `json:"target"`
+					} `json:"baseRef"`
 					HeadRef struct {
 						Compare struct {
 							AheadBy int `json:"aheadBy"`
@@ -600,6 +606,7 @@ func GetPullRequestDetails(
 		ApprovedBy:       make([]string, len(response.Data.Repository.PullRequest.Reviews.Nodes)),
 		Author:           response.Data.Repository.PullRequest.Author.Login,
 		BaseRefName:      baseName,
+		BaseRefOid:       response.Data.Repository.PullRequest.BaseRef.Target.Oid,
 		HasConflicts:     response.Data.Repository.PullRequest.Mergeable == "CONFLICTING",
 		HeadRefID:        response.Data.Repository.PullRequest.HeadRef.ID,
 		HeadRefName:      response.Data.Repository.PullRequest.HeadRef.Name,
