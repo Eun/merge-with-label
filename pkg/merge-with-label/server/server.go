@@ -76,7 +76,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Msg("read request body")
 	}
 
-	
 	logger.Info().Msg("received webhook")
 
 	baseRequest := h.unmarshalAndValidateRequest(&logger, body, w)
