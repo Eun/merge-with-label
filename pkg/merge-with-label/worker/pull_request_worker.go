@@ -76,7 +76,9 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 
 	// Record the new SHA before we do the work so a concurrent duplicate job
 	// (if it slipped past the dedup key) also discards itself.
-	if err := worker.Store.SetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha, details.BaseRefOid); err != nil {
+	if err := worker.Store.SetPRState(
+		ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha, details.BaseRefOid,
+	); err != nil {
 		return errors.Wrap(err, "unable to set pr state")
 	}
 
