@@ -284,7 +284,7 @@ func TestKVOverwrite(t *testing.T) {
 
 func TestSetGetPRState(t *testing.T) {
 	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, t.Name(), 42, "sha-abc"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 42, "sha-abc", "base-sha-abc"); err != nil {
 		t.Fatalf("SetPRState: %v", err)
 	}
 	state, err := sharedStore.GetPRState(ctx, t.Name(), 42)
@@ -296,6 +296,9 @@ func TestSetGetPRState(t *testing.T) {
 	}
 	if state.HeadSHA != "sha-abc" {
 		t.Errorf("HeadSHA = %q, want %q", state.HeadSHA, "sha-abc")
+	}
+	if state.BaseSHA != "base-sha-abc" {
+		t.Errorf("BaseSHA = %q, want %q", state.BaseSHA, "base-sha-abc")
 	}
 }
 
@@ -312,10 +315,10 @@ func TestPRStateMiss(t *testing.T) {
 
 func TestPRStateOverwrite(t *testing.T) {
 	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "old-sha"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "old-sha", "old-base"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "new-sha"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "new-sha", "new-base"); err != nil {
 		t.Fatal(err)
 	}
 	state, err := sharedStore.GetPRState(ctx, t.Name(), 1)
@@ -323,13 +326,16 @@ func TestPRStateOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if state.HeadSHA != "new-sha" {
-		t.Errorf("expected overwrite, got %q", state.HeadSHA)
+		t.Errorf("expected HeadSHA overwrite, got %q", state.HeadSHA)
+	}
+	if state.BaseSHA != "new-base" {
+		t.Errorf("expected BaseSHA overwrite, got %q", state.BaseSHA)
 	}
 }
 
 func TestPRStateScopedToRepo(t *testing.T) {
 	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, "repo-A-"+t.Name(), 1, "sha-a"); err != nil {
+	if err := sharedStore.SetPRState(ctx, "repo-A-"+t.Name(), 1, "sha-a", "base-a"); err != nil {
 		t.Fatal(err)
 	}
 	state, err := sharedStore.GetPRState(ctx, "repo-B-"+t.Name(), 1)
@@ -343,7 +349,7 @@ func TestPRStateScopedToRepo(t *testing.T) {
 
 func TestDeletePRState(t *testing.T) {
 	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, t.Name(), 5, "sha"); err != nil {
+	if err := sharedStore.SetPRState(ctx, t.Name(), 5, "sha", "base"); err != nil {
 		t.Fatal(err)
 	}
 	if err := sharedStore.DeletePRState(ctx, t.Name(), 5); err != nil {

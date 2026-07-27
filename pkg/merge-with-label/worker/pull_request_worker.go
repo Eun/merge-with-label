@@ -61,15 +61,22 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return errors.Wrap(err, "unable to get pr state")
 	}
 	if prState != nil && prState.HeadSHA == details.LastCommitSha {
+		if prState.BaseSHA == details.BaseRefOid {
+			logger.Debug().
+				Str("sha", details.LastCommitSha).
+				Msg("pr state sha matches last seen sha, discarding duplicate event")
+			return nil
+		}
 		logger.Debug().
-			Str("sha", details.LastCommitSha).
-			Msg("pr state sha matches last seen sha, discarding duplicate event")
-		return nil
+			Str("head_sha", details.LastCommitSha).
+			Str("old_base_sha", prState.BaseSHA).
+			Str("new_base_sha", details.BaseRefOid).
+			Msg("pr state head sha matches but base moved, re-evaluating")
 	}
 
 	// Record the new SHA before we do the work so a concurrent duplicate job
 	// (if it slipped past the dedup key) also discards itself.
-	if err := worker.Store.SetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha); err != nil {
+	if err := worker.Store.SetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha, details.BaseRefOid); err != nil {
 		return errors.Wrap(err, "unable to set pr state")
 	}
 

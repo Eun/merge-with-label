@@ -300,6 +300,7 @@ func (s *Store) KVSet(ctx context.Context, bucket, key string, value []byte, ttl
 // PRStateResult is returned by GetPRState.
 type PRStateResult struct {
 	HeadSHA   string
+	BaseSHA   string
 	UpdatedAt time.Time
 }
 
@@ -307,9 +308,9 @@ type PRStateResult struct {
 func (s *Store) GetPRState(ctx context.Context, repoNodeID string, prNumber int64) (*PRStateResult, error) {
 	var r PRStateResult
 	err := s.pool.QueryRow(ctx, `
-		SELECT head_sha, updated_at FROM mwl_pr_state
+		SELECT head_sha, base_sha, updated_at FROM mwl_pr_state
 		WHERE repo_node_id = $1 AND pr_number = $2
-	`, repoNodeID, prNumber).Scan(&r.HeadSHA, &r.UpdatedAt)
+	`, repoNodeID, prNumber).Scan(&r.HeadSHA, &r.BaseSHA, &r.UpdatedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, nil //nolint:nilnil // cache miss is not an error
@@ -328,15 +329,16 @@ func (s *Store) DeletePRState(ctx context.Context, repoNodeID string, prNumber i
 	return errors.Wrap(err, "delete pr state")
 }
 
-// SetPRState upserts the last-seen head SHA for a PR.
-func (s *Store) SetPRState(ctx context.Context, repoNodeID string, prNumber int64, headSHA string) error {
+// SetPRState upserts the last-seen (head, base) SHA pair for a PR.
+func (s *Store) SetPRState(ctx context.Context, repoNodeID string, prNumber int64, headSHA, baseSHA string) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO mwl_pr_state (repo_node_id, pr_number, head_sha, updated_at)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO mwl_pr_state (repo_node_id, pr_number, head_sha, base_sha, updated_at)
+		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (repo_node_id, pr_number) DO UPDATE
 		    SET head_sha   = EXCLUDED.head_sha,
+		        base_sha   = EXCLUDED.base_sha,
 		        updated_at = NOW()
-	`, repoNodeID, prNumber, headSHA)
+	`, repoNodeID, prNumber, headSHA, baseSHA)
 	return errors.Wrap(err, "set pr state")
 }
 
