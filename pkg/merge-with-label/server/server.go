@@ -33,11 +33,21 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	logger := h.GetLoggerForContext(r.Context())
+	githubEvent := r.Header.Get("X-GitHub-Event")
+	githubID := r.Header.Get("X-GitHub-Delivery")
+	if githubID == "" {
+		githubID = uuid.NewString()
+	}
+
+	logger := h.GetLoggerForContext(r.Context()).With().
+		Str("github_event", githubEvent).
+		Str("github_delivery", githubID).
+		Logger()
+
 	logger.Debug().
 		Str("method", r.Method).
 		Str("uri", r.RequestURI).
-		Str("remote_addr", r.RemoteAddr)
+		Str("remote_addr", r.RemoteAddr).
 		Msg("received request")
 	if r.RequestURI == "/healthz" {
 		w.WriteHeader(http.StatusOK)
@@ -66,16 +76,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Msg("read request body")
 	}
 
-	githubEvent := r.Header.Get("X-GitHub-Event")
-	githubID := r.Header.Get("X-GitHub-Delivery")
-	if githubID == "" {
-		githubID = uuid.NewString()
-	}
-
-	logger = logger.With().
-		Str("event", githubEvent).
-		Str("delivery", githubID).
-		Logger()
+	
 	logger.Info().Msg("received webhook")
 
 	baseRequest := h.unmarshalAndValidateRequest(&logger, body, w)
