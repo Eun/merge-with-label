@@ -39,10 +39,6 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 
 	if details.State != "OPEN" {
 		logger.Debug().Msg("pull request is not open anymore")
-		// PR is closed or merged — no need to track its state anymore.
-		if err := worker.Store.DeletePRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number); err != nil {
-			logger.Warn().Err(err).Msg("unable to delete pr state for closed pr")
-		}
 		return nil
 	}
 	if details.LastCommitTime.IsZero() || details.LastCommitSha == "" {
@@ -50,36 +46,32 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 		return nil
 	}
 
-	// PR-state deduplication: if we already processed this exact head SHA for
-	// this PR, skip the update/merge logic to avoid double-triggering.
-	// This is the second defense line — it catches the case where two events
-	// with different dedup keys both get dequeued before either is processed
-	// (e.g. two concurrent worker replicas, or events arriving after the first
-	// job was already consumed).
-	prState, err := worker.Store.GetPRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number)
+	// Compute a fingerprint of all fields that drive the merge/update decision.
+	// This fingerprint is the dedup key: two runs that see identical GitHub state
+	// make identical decisions, so the second is a pure duplicate and can be
+	// skipped. If anything changed (new approval, check pass, label change,
+	// commit, base-branch advance) the hash differs and the run proceeds.
+	//
+	// Writing the hash before doing work also blocks a concurrent goroutine that
+	// races on the same PR: since the queue row is deleted on dequeue the dedup
+	// key is free, so a new event can enqueue a fresh row before the first run
+	// finishes. That second goroutine fetches the same GitHub state, computes the
+	// same hash, and skips — exactly like a duplicate.
+	hash := prStateHash(details)
+
+	lastHash, err := worker.Store.GetPRStateHash(ctx, msg.Repository.NodeID, msg.PullRequest.Number)
 	if err != nil {
-		return errors.Wrap(err, "unable to get pr state")
+		return errors.Wrap(err, "unable to get pr state hash")
 	}
-	if prState != nil && prState.HeadSHA == details.LastCommitSha {
-		if prState.BaseSHA == details.BaseRefOid {
-			logger.Debug().
-				Str("sha", details.LastCommitSha).
-				Msg("pr state sha matches last seen sha, discarding duplicate event")
-			return nil
-		}
+	if lastHash == hash {
 		logger.Debug().
-			Str("head_sha", details.LastCommitSha).
-			Str("old_base_sha", prState.BaseSHA).
-			Str("new_base_sha", details.BaseRefOid).
-			Msg("pr state head sha matches but base moved, re-evaluating")
+			Str("hash", hash).
+			Msg("pr decision state unchanged since last run, skipping")
+		return nil
 	}
 
-	// Record the new SHA before we do the work so a concurrent duplicate job
-	// (if it slipped past the dedup key) also discards itself.
-	if err := worker.Store.SetPRState(
-		ctx, msg.Repository.NodeID, msg.PullRequest.Number, details.LastCommitSha, details.BaseRefOid,
-	); err != nil {
-		return errors.Wrap(err, "unable to set pr state")
+	if err := worker.Store.SetPRStateHash(ctx, msg.Repository.NodeID, msg.PullRequest.Number, hash); err != nil {
+		return errors.Wrap(err, "unable to set pr state hash")
 	}
 
 	logger.Info().Str("sha", details.LastCommitSha).Int("ahead_by", details.AheadBy).Msg("processing pull request")
@@ -94,14 +86,6 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 
 	if didUpdatePullRequest && sess.Config.Merge.Labels.ContainsOneOf(details.Labels...) != "" {
 		logger.Debug().Msg("not merging, because pull request was just updated")
-		// Clear the PR state so the rescheduled job is not blocked by the SHA
-		// dedup guard. Without this, the synchronize event fired by the branch
-		// update can race the rescheduled job: if the synchronize job runs
-		// first it records the new SHA, and the rescheduled job then discards
-		// itself as a duplicate before ever attempting the merge.
-		if err := worker.Store.DeletePRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number); err != nil {
-			logger.Warn().Err(err).Msg("unable to clear pr state after update")
-		}
 		return pushBackError{delay: worker.DurationToWaitAfterUpdateBranch}
 	}
 
@@ -115,10 +99,6 @@ func (worker *pullRequestWorker) runLogic(rootLogger *zerolog.Logger, msg *commo
 	}
 
 	if didMergePullRequest {
-		// PR is merged — remove its state row so mwl_pr_state stays clean.
-		if err := worker.Store.DeletePRState(ctx, msg.Repository.NodeID, msg.PullRequest.Number); err != nil {
-			logger.Warn().Err(err).Msg("unable to delete pr state after merge")
-		}
 		if sess.Config.Merge.DeleteBranch {
 			logger.Info().Str("branch", details.HeadRefName).Msg("deleting branch")
 			if err := github.DeleteRef(ctx, worker.HTTPClient, sess.AccessToken, details.HeadRefID); err != nil {

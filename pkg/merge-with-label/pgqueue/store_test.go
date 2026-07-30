@@ -279,99 +279,6 @@ func TestKVOverwrite(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// PR state
-// -----------------------------------------------------------------------
-
-func TestSetGetPRState(t *testing.T) {
-	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, t.Name(), 42, "sha-abc", "base-sha-abc"); err != nil {
-		t.Fatalf("SetPRState: %v", err)
-	}
-	state, err := sharedStore.GetPRState(ctx, t.Name(), 42)
-	if err != nil {
-		t.Fatalf("GetPRState: %v", err)
-	}
-	if state == nil {
-		t.Fatal("expected state, got nil")
-	}
-	if state.HeadSHA != "sha-abc" {
-		t.Errorf("HeadSHA = %q, want %q", state.HeadSHA, "sha-abc")
-	}
-	if state.BaseSHA != "base-sha-abc" {
-		t.Errorf("BaseSHA = %q, want %q", state.BaseSHA, "base-sha-abc")
-	}
-}
-
-func TestPRStateMiss(t *testing.T) {
-	ctx := context.Background()
-	state, err := sharedStore.GetPRState(ctx, "unknown-"+t.Name(), 1)
-	if err != nil {
-		t.Fatalf("GetPRState: %v", err)
-	}
-	if state != nil {
-		t.Error("expected nil on miss")
-	}
-}
-
-func TestPRStateOverwrite(t *testing.T) {
-	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "old-sha", "old-base"); err != nil {
-		t.Fatal(err)
-	}
-	if err := sharedStore.SetPRState(ctx, t.Name(), 1, "new-sha", "new-base"); err != nil {
-		t.Fatal(err)
-	}
-	state, err := sharedStore.GetPRState(ctx, t.Name(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.HeadSHA != "new-sha" {
-		t.Errorf("expected HeadSHA overwrite, got %q", state.HeadSHA)
-	}
-	if state.BaseSHA != "new-base" {
-		t.Errorf("expected BaseSHA overwrite, got %q", state.BaseSHA)
-	}
-}
-
-func TestPRStateScopedToRepo(t *testing.T) {
-	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, "repo-A-"+t.Name(), 1, "sha-a", "base-a"); err != nil {
-		t.Fatal(err)
-	}
-	state, err := sharedStore.GetPRState(ctx, "repo-B-"+t.Name(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state != nil {
-		t.Error("PR state must be scoped to repo_node_id")
-	}
-}
-
-func TestDeletePRState(t *testing.T) {
-	ctx := context.Background()
-	if err := sharedStore.SetPRState(ctx, t.Name(), 5, "sha", "base"); err != nil {
-		t.Fatal(err)
-	}
-	if err := sharedStore.DeletePRState(ctx, t.Name(), 5); err != nil {
-		t.Fatalf("DeletePRState: %v", err)
-	}
-	state, err := sharedStore.GetPRState(ctx, t.Name(), 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state != nil {
-		t.Error("expected nil after delete")
-	}
-}
-
-func TestDeletePRStateIdempotent(t *testing.T) {
-	ctx := context.Background()
-	if err := sharedStore.DeletePRState(ctx, "ghost-"+t.Name(), 99); err != nil {
-		t.Errorf("DeletePRState on missing row: %v", err)
-	}
-}
-
-// -----------------------------------------------------------------------
 // Enqueue upsert: available_at advancement
 // -----------------------------------------------------------------------
 
@@ -487,5 +394,81 @@ func TestKVUnloggedAndCron(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 1 cron job named mwl_kv_cleanup, got %d", count)
+	}
+}
+
+// -----------------------------------------------------------------------
+// PR decision-state fingerprint
+// -----------------------------------------------------------------------
+
+func TestGetSetPRStateHash(t *testing.T) {
+	ctx := context.Background()
+
+	// Cache miss returns empty string.
+	hash, err := sharedStore.GetPRStateHash(ctx, t.Name(), 1)
+	if err != nil {
+		t.Fatalf("GetPRStateHash (miss): %v", err)
+	}
+	if hash != "" {
+		t.Errorf("expected empty on miss, got %q", hash)
+	}
+
+	// Set a hash.
+	if err := sharedStore.SetPRStateHash(ctx, t.Name(), 1, "abc123"); err != nil {
+		t.Fatalf("SetPRStateHash: %v", err)
+	}
+
+	// Get returns the stored hash.
+	hash, err = sharedStore.GetPRStateHash(ctx, t.Name(), 1)
+	if err != nil {
+		t.Fatalf("GetPRStateHash (hit): %v", err)
+	}
+	if hash != "abc123" {
+		t.Errorf("GetPRStateHash = %q, want %q", hash, "abc123")
+	}
+}
+
+func TestSetPRStateHashOverwrite(t *testing.T) {
+	ctx := context.Background()
+	if err := sharedStore.SetPRStateHash(ctx, t.Name(), 1, "old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sharedStore.SetPRStateHash(ctx, t.Name(), 1, "new"); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := sharedStore.GetPRStateHash(ctx, t.Name(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash != "new" {
+		t.Errorf("expected overwrite, got %q", hash)
+	}
+}
+
+func TestPRStateHashScopedToRepo(t *testing.T) {
+	ctx := context.Background()
+	if err := sharedStore.SetPRStateHash(ctx, "repo-A-"+t.Name(), 1, "hash-a"); err != nil {
+		t.Fatal(err)
+	}
+	// Different repo, same PR number — must be a miss.
+	hash, err := sharedStore.GetPRStateHash(ctx, "repo-B-"+t.Name(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hash != "" {
+		t.Error("pr state hash must be scoped to repo_node_id")
+	}
+}
+
+func TestPRStateIsUnlogged(t *testing.T) {
+	ctx := context.Background()
+	var persistence string
+	if err := sharedStore.QueryRow(ctx,
+		`SELECT relpersistence FROM pg_class WHERE relname = 'mwl_pr_state'`,
+	).Scan(&persistence); err != nil {
+		t.Fatalf("query relpersistence: %v", err)
+	}
+	if persistence != "u" {
+		t.Errorf("mwl_pr_state relpersistence = %q, want 'u' (unlogged)", persistence)
 	}
 }

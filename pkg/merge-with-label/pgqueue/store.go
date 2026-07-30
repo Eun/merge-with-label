@@ -294,52 +294,36 @@ func (s *Store) KVSet(ctx context.Context, bucket, key string, value []byte, ttl
 }
 
 // -----------------------------------------------------------------------
-// PR state cache
+// PR decision-state fingerprint
 // -----------------------------------------------------------------------
 
-// PRStateResult is returned by GetPRState.
-type PRStateResult struct {
-	HeadSHA   string
-	BaseSHA   string
-	UpdatedAt time.Time
-}
-
-// GetPRState returns the last-seen head SHA for a PR, or nil if not cached.
-func (s *Store) GetPRState(ctx context.Context, repoNodeID string, prNumber int64) (*PRStateResult, error) {
-	var r PRStateResult
+// GetPRStateHash returns the stored decision-state fingerprint for a PR, or
+// "" if no state has been recorded yet (cache miss).
+func (s *Store) GetPRStateHash(ctx context.Context, repoNodeID string, prNumber int64) (string, error) {
+	var hash string
 	err := s.pool.QueryRow(ctx, `
-		SELECT head_sha, base_sha, updated_at FROM mwl_pr_state
+		SELECT state_hash FROM mwl_pr_state
 		WHERE repo_node_id = $1 AND pr_number = $2
-	`, repoNodeID, prNumber).Scan(&r.HeadSHA, &r.BaseSHA, &r.UpdatedAt)
+	`, repoNodeID, prNumber).Scan(&hash)
 	if err != nil {
 		if isNoRows(err) {
-			return nil, nil //nolint:nilnil // cache miss is not an error
+			return "", nil // cache miss
 		}
-		return nil, errors.Wrap(err, "get pr state")
+		return "", errors.Wrap(err, "get pr state hash")
 	}
-	return &r, nil
+	return hash, nil
 }
 
-// DeletePRState removes the cached state for a PR that is no longer open
-// (closed, merged). This keeps mwl_pr_state from accumulating dead rows.
-func (s *Store) DeletePRState(ctx context.Context, repoNodeID string, prNumber int64) error {
+// SetPRStateHash upserts the decision-state fingerprint for a PR.
+func (s *Store) SetPRStateHash(ctx context.Context, repoNodeID string, prNumber int64, hash string) error {
 	_, err := s.pool.Exec(ctx, `
-		DELETE FROM mwl_pr_state WHERE repo_node_id = $1 AND pr_number = $2
-	`, repoNodeID, prNumber)
-	return errors.Wrap(err, "delete pr state")
-}
-
-// SetPRState upserts the last-seen (head, base) SHA pair for a PR.
-func (s *Store) SetPRState(ctx context.Context, repoNodeID string, prNumber int64, headSHA, baseSHA string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO mwl_pr_state (repo_node_id, pr_number, head_sha, base_sha, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO mwl_pr_state (repo_node_id, pr_number, state_hash, updated_at)
+		VALUES ($1, $2, $3, NOW())
 		ON CONFLICT (repo_node_id, pr_number) DO UPDATE
-		    SET head_sha   = EXCLUDED.head_sha,
-		        base_sha   = EXCLUDED.base_sha,
+		    SET state_hash = EXCLUDED.state_hash,
 		        updated_at = NOW()
-	`, repoNodeID, prNumber, headSHA, baseSHA)
-	return errors.Wrap(err, "set pr state")
+	`, repoNodeID, prNumber, hash)
+	return errors.Wrap(err, "set pr state hash")
 }
 
 // QueryRow executes a query that returns at most one row.
