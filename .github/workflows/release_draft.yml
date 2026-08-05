@@ -12,7 +12,7 @@ jobs:
       contents: write
       pull-requests: read
     steps:
-      - uses: release-drafter/release-drafter@v7
+      - uses: release-drafter/release-drafter@v7.6.0
         with:
           config-name: release-drafter.yml
         env:
